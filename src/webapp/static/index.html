@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MarTube</title>
+  <link rel="preload" href="/static/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <a class="brand glass" href="#/" aria-label="MarTube home">
+      <span class="brand-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.6v14.8a.8.8 0 0 0 1.2.7l11.6-7.4a.8.8 0 0 0 0-1.4L8.2 3.9A.8.8 0 0 0 7 4.6z" fill="currentColor"/></svg></span>
+      <span>MarTube</span>
+    </a>
+    <nav class="tabs glass" aria-label="Main">
+      <a href="#/" data-nav="home">Home</a>
+      <a href="#/library" data-nav="library">Library <span class="count" id="library-count" title="New episodes" hidden></span></a>
+      <a href="#/downloads" data-nav="downloads">Downloads <span class="count" id="download-count" title="Active downloads" hidden></span></a>
+    </nav>
+    <div class="topbar-end">
+      <form class="nav-search glass" id="nav-search" role="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+        <input type="search" placeholder="Search" aria-label="Search movies and TV shows" autocomplete="off">
+      </form>
+      <button class="nav-account glass" id="nav-account" type="button" aria-label="IDLIX account" title="IDLIX account">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.8 19.5a7.2 7.2 0 0 1 14.4 0"/></svg>
+        <span class="account-initial" hidden></span>
+      </button>
+    </div>
+  </header>
+  <main id="view" tabindex="-1"></main>
+  <div id="overlay-root"></div>
+  <script src="/static/vendor/hls.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

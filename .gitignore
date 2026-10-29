@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+ffmpeg-release-essentials.zip
+src/ffmpeg/
+
+# Downloaded media
+Downloads/
+*.mp4
+*.vtt
+*.srt
+
+
+# Local tests
+tests/

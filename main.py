@@ -1,3 +1,4 @@
+from src import settings
 from src.idlixHelper import IdlixHelper, logger
 from prettytable import PrettyTable
 import inquirer
@@ -8,12 +9,13 @@ RETRY_LIMIT = 3
 
 
 def retry(func, *args, **kwargs):
+    result = None
     for _ in range(RETRY_LIMIT):
         result = func(*args, **kwargs)
         if result and result.get("status"):
             return result
         time.sleep(1)
-    return {"status": False, "message": "Maximum retry reached"}
+    return result or {"status": False, "message": "Maximum retry reached (no response)"}
 
 
 def play_m3u8_thread(idlix_helper):
@@ -27,53 +29,20 @@ def play_m3u8_thread(idlix_helper):
 def process_movie(idlix_helper, url: str, mode: str):
     video_data = retry(idlix_helper.get_video_data, url)
     if not video_data.get("status"):
-        logger.error("Error getting video data")
+        logger.error(f"Error getting video data: {video_data.get('message')}")
         return
 
     logger.info(
         f"Getting video data | Video ID: {video_data['video_id']} | Video Name: {video_data['video_name']}"
     )
 
-    embed = retry(idlix_helper.get_embed_url)
-    if not embed.get("status"):
-        logger.error("Error getting embed URL")
-        return
-
-    logger.success(f"Getting embed URL: {embed['embed_url']}")
-
     m3u8 = retry(idlix_helper.get_m3u8_url)
     if not m3u8.get("status"):
-        logger.error("Error getting M3U8 URL")
+        logger.error(f"Error getting M3U8 URL: {m3u8.get('message')}")
         return
 
     logger.success(f"Getting m3u8 URL | {m3u8['m3u8_url']}")
-
-    if m3u8.get("is_variant_playlist"):
-        logger.warning("This video has a variant playlist")
-
-        choices = [
-            f"{v['id']} - {v['resolution']}" for v in m3u8["variant_playlist"]
-        ]
-
-        question = [
-            inquirer.List(
-                "variant",
-                message="Select variant",
-                choices=choices,
-                carousel=True
-            )
-        ]
-        answer = inquirer.prompt(question)
-
-        selected_id = answer["variant"].split(" - ")[0]
-
-        for v in m3u8["variant_playlist"]:
-            if str(v["id"]) == selected_id:
-                idlix_helper.set_m3u8_url(v["uri"])
-                logger.success(f"Selected variant: {v['resolution']}")
-                break
-    else:
-        logger.warning("This video has no variant playlist")
+    logger.info(f"Quality: {m3u8.get('quality', 'source')}")
 
     # 5. If play → download subtitle
     if mode == "play":
@@ -90,15 +59,20 @@ def process_movie(idlix_helper, url: str, mode: str):
         th.start()
 
         # avoid hang forever
-        th.join(timeout=5)
+        th.join()
 
     # 6. If download
     else:
         result = idlix_helper.download_m3u8()
         if result.get("status"):
-            logger.success(f"Downloading {video_data['video_name']} success")
+            logger.success(f"Downloading {video_data['video_name']} success: {result['path']}")
+            subtitle = retry(idlix_helper.save_subtitle)
+            if subtitle.get("status"):
+                logger.success(f"Subtitle saved: {subtitle['subtitle']}")
+            else:
+                logger.warning(f"Subtitle unavailable: {subtitle.get('message')}")
         else:
-            logger.error("Error downloading m3u8")
+            logger.error(f"Error downloading m3u8: {result.get('message')}")
 
 
 def show_featured_table(featured):
@@ -123,14 +97,15 @@ def main():
     status_exit = False
 
     while not status_exit:
-        idlix = IdlixHelper()
+        idlix = IdlixHelper(settings.download_dir())
         home = retry(idlix.get_home)
 
         if not home.get("status") or len(home.get("featured_movie", [])) == 0:
             logger.error(f"Error fetching home: {home.get('message')}")
-            break
+            featured = []
+        else:
+            featured = home["featured_movie"]
 
-        featured = home["featured_movie"]
         show_featured_table(featured)
 
         # Main Menu
@@ -138,9 +113,10 @@ def main():
             inquirer.List(
                 "action",
                 message="Select action",
-                choices=[
+                choices=([
                     "Download Featured Movie",
                     "Play Featured Movie",
+                ] if featured else []) + [
                     "Download Movie by URL",
                     "Play Movie by URL",
                     "Exit"
@@ -187,6 +163,8 @@ def main():
         else:
             logger.info("Exiting...")
             status_exit = True
+
+        idlix.modern.close()
 
 
 if __name__ == "__main__":
