@@ -13,3 +13,6 @@ Downloads/
 
 # Local tests
 tests/
+
+# Local secrets
+.env
