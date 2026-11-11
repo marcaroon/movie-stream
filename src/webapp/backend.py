@@ -476,7 +476,7 @@ class Backend:
             return {'kind': 'local', 'url': url, 'src': f"/media/{media['id']}",
                     'subtitle': f"/subtitle/local/{media['id']}" if media['subtitle_path'] else None,
                     'title': media['display_title'], 'series': media['title'] if media['kind'] == 'series' else None,
-                    'resume': self.resume_position(progress),
+                    'resume': self.resume_position(progress), 'details': self.local_details(media),
                     'next': self.next_episode(media['slug'], media['season'], media['number'])
                     if media['kind'] == 'series' else None}
 
@@ -506,9 +506,36 @@ class Backend:
                 'subtitle': '/subtitle/stream' if has_subtitle else None,
                 'title': info['title'], 'series': info['series']['title'] if episode else None,
                 'quality': stream.get('quality'), 'resume': self.resume_position(self.library.progress(url)),
-                **self.session_quality(client),
+                **self.session_quality(client), 'details': self.stream_details(info),
                 'next': self.next_episode(info['series']['slug'], episode['season'], episode['number'])
                 if episode else None}
+
+    @staticmethod
+    def local_details(media):
+        """What the player's info panel shows about a downloaded video."""
+        path = Path(media['file_path'])
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = media['size_bytes']
+        return {'kind': media['kind'], 'slug': media['slug'], 'title': media['title'] or media['display_title'],
+                'year': media['year'], 'overview': media['episode_overview'] or media['overview'],
+                'season': media['season'], 'episode': media['number'], 'episode_name': media['episode_name'],
+                'art': media['still_path'] or media['backdrop_path'], 'poster': media['poster_path'],
+                'file': path.name, 'size': size, 'added_at': media['added_at']}
+
+    @staticmethod
+    def stream_details(info):
+        """What the player's info panel shows about a streamed movie or episode."""
+        episode = info.get('episode') or {}
+        title = info.get('series') if episode else info.get('movie') or {}
+        return {'kind': 'series' if episode else 'movie', 'slug': title.get('slug'),
+                'title': title.get('title') or info.get('title'), 'year': title.get('year'),
+                'overview': episode.get('overview') or title.get('overview'),
+                'season': episode.get('season'), 'episode': episode.get('number'),
+                'episode_name': episode.get('name'), 'air_date': episode.get('air_date'),
+                'runtime': episode.get('runtime') or title.get('runtime'),
+                'art': episode.get('still_path') or title.get('backdrop_path'), 'poster': title.get('poster_path')}
 
     @staticmethod
     def resume_position(progress):

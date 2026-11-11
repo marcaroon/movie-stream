@@ -61,6 +61,12 @@ const ICONS = {
   power: '<path d="M12 3.5V12"/><path d="M6.7 7.2a7.5 7.5 0 1 0 10.6 0"/>',
   refresh: '<path d="M19 12a7 7 0 1 1-2.1-5"/><path d="M19 4.5v4h-4"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  sliders: '<path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9"/><circle cx="15" cy="7.5" r="2.2"/><circle cx="9" cy="16.5" r="2.2"/>',
+  pip: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11.5" width="6.5" height="5" rx="1.2" fill="currentColor" stroke="none"/>',
+  episodes: '<rect x="3.5" y="5" width="6.5" height="5" rx="1.2"/><rect x="3.5" y="14" width="6.5" height="5" rx="1.2"/><path d="M13.5 6.5h7M13.5 9h4.5M13.5 15.5h7M13.5 18h4.5"/>',
+  stats: '<path d="M5 19.5v-7M10 19.5v-15M15 19.5v-9M20 19.5v-12"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14.5h8"/>',
 };
 
 function icon(name, className) {
@@ -1056,6 +1062,20 @@ async function renderDownloads(match, token) {
 // Player
 // ------------------------------------------------------------
 
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const CAPTION_SIZES = [['s', 'S'], ['m', 'M'], ['l', 'L'], ['xl', 'XL']];
+const SHORTCUTS = [
+  ['Space · K', 'Play or pause'], ['← · J', 'Back 10 seconds'], ['→ · L', 'Forward 10 seconds'],
+  ['Shift ← →', 'Back or forward 30 seconds'], [', .', 'Previous or next frame (paused)'],
+  ['0 – 9', 'Jump to 0% – 90%'], ['↑ ↓', 'Volume up or down'], ['M', 'Mute'],
+  ['< >', 'Slower or faster'], ['C', 'Subtitles on or off'], ['[ ]', 'Subtitles earlier or later'],
+  ['F', 'Full screen'], ['P', 'Picture in picture'], ['N', 'Next episode'], ['E', 'Episodes'],
+  ['I', 'Details'], ['S', 'Playback stats'], ['?', 'Keyboard shortcuts'], ['Esc', 'Close a panel, or leave'],
+];
+const clockTime = date => date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+const speedLabel = rate => (rate === 1 ? 'Normal' : `${rate}×`);
+const signedSeconds = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(2).replace(/0$/, '')} s`;
+
 async function renderPlayer(match, token) {
   const params = new URLSearchParams(match[1]);
   const request = params.get('media') ? {media_id: Number(params.get('media'))} : {url: params.get('url')};
@@ -1063,48 +1083,108 @@ async function renderPlayer(match, token) {
 
   const video = h('video', {playsinline: true, preload: 'auto', autoplay: true});
   const back = () => (history.length > 1 ? history.back() : (location.hash = '#/'));
+
+  // Heading: show or movie, episode, and badges for source, quality and subtitles.
+  const eyebrow = h('div', {class: 'eyebrow', hidden: true});
   const titleText = h('div', {class: 't', text: 'Loading…'});
-  const subText = h('div', {class: 's'});
+  const metaLine = h('div', {class: 'player-meta'});
+  const infoButton = h('button', {class: 'btn btn-icon btn-glass glass', 'aria-label': 'Details', title: 'Details (I)', hidden: true}, icon('info'));
   const centre = h('div', {class: 'player-center'},
     h('div', {class: 'player-message glass dark'}, h('div', {class: 'spinner', style: 'margin:0 auto'}),
       h('p', {text: 'Preparing your video… streams can take about 15 seconds to start.'})));
+  const osd = h('div', {class: 'player-osd glass dark', hidden: true, 'aria-live': 'polite'});
 
+  // Transport
   const played = h('div', {class: 'played'});
   const buffered = h('div', {class: 'buffered'});
+  const hoverFill = h('div', {class: 'hover-fill'});
   const knob = h('div', {class: 'knob'});
   const tip = h('div', {class: 'scrub-tip glass dark', hidden: true});
   const scrubber = h('div', {class: 'scrubber', role: 'slider', 'aria-label': 'Playback position', tabindex: '0'},
-    h('div', {class: 'track'}, buffered, played), knob, tip);
-  const timeText = h('span', {class: 'time', text: '0:00 / 0:00'});
-  const playButton = h('button', {class: 'ctl main', 'aria-label': 'Play'}, icon('play'));
-  const captionsButton = h('button', {class: 'ctl', 'aria-label': 'Subtitles', title: 'Subtitles (C)', hidden: true}, icon('captions'));
+    h('div', {class: 'track'}, buffered, hoverFill, played), knob, tip);
+  const timeButton = h('button', {class: 'time', title: 'Show remaining time', text: '0:00 / 0:00'});
+  const endsText = h('span', {class: 'ends'});
+  const playButton = h('button', {class: 'ctl main', 'aria-label': 'Play', title: 'Play (K)'}, icon('play'));
   const muteButton = h('button', {class: 'ctl', 'aria-label': 'Mute', title: 'Mute (M)'}, icon('volume'));
   const volume = h('input', {class: 'volume', type: 'range', min: 0, max: 1, step: 0.05, 'aria-label': 'Volume'});
-  const fullscreenButton = h('button', {class: 'ctl', 'aria-label': 'Full screen', title: 'Full screen (F)'}, icon('expand'));
   const nextButton = h('button', {class: 'btn btn-glass glass small', hidden: true}, icon('next'), 'Next Episode');
+  const episodesButton = h('button', {class: 'ctl', 'aria-label': 'Episodes', title: 'Episodes (E)', hidden: true}, icon('episodes'));
+  const captionsButton = h('button', {class: 'ctl', 'aria-label': 'Subtitles', title: 'Subtitles (C)', 'data-pop': true, hidden: true}, icon('captions'));
+  const settingsButton = h('button', {class: 'ctl', 'aria-label': 'Settings', title: 'Speed, stats and shortcuts', 'data-pop': true}, icon('sliders'));
+  const pipButton = h('button', {class: 'ctl pip', 'aria-label': 'Picture in picture', title: 'Picture in picture (P)',
+    hidden: !document.pictureInPictureEnabled}, icon('pip'));
+  const fullscreenButton = h('button', {class: 'ctl', 'aria-label': 'Full screen', title: 'Full screen (F)'}, icon('expand'));
   const controls = h('div', {class: 'controls glass dark'}, scrubber,
     h('div', {class: 'control-row'},
       playButton,
-      h('button', {class: 'ctl', 'aria-label': 'Back 10 seconds', title: 'Back 10 seconds (←)', onclick: () => seek(video.currentTime - 10)}, icon('back10')),
-      h('button', {class: 'ctl', 'aria-label': 'Forward 10 seconds', title: 'Forward 10 seconds (→)', onclick: () => seek(video.currentTime + 10)}, icon('fwd10')),
-      timeText, h('span', {class: 'grow'}), nextButton, captionsButton, muteButton, volume, fullscreenButton));
-  const player = h('div', {class: 'player'}, video,
-    h('div', {class: 'player-top'}, h('button', {class: 'btn btn-icon btn-glass glass', 'aria-label': 'Back', onclick: back}, icon('left')),
-      h('div', {}, titleText, subText)),
-    centre, controls);
+      h('button', {class: 'ctl', 'aria-label': 'Back 10 seconds', title: 'Back 10 seconds (←)', onclick: () => skip(-10)}, icon('back10')),
+      h('button', {class: 'ctl', 'aria-label': 'Forward 10 seconds', title: 'Forward 10 seconds (→)', onclick: () => skip(10)}, icon('fwd10')),
+      h('div', {class: 'volume-group'}, muteButton, volume),
+      timeButton, h('span', {class: 'grow'}), endsText,
+      nextButton, episodesButton, captionsButton, settingsButton, pipButton, fullscreenButton));
+
+  const panel = h('aside', {class: 'player-panel glass dark', hidden: true});
+  const pop = h('div', {class: 'player-pop glass dark', hidden: true});
+  const statsBody = h('div');
+  const stats = h('div', {class: 'player-stats glass dark', hidden: true},
+    h('div', {class: 'stats-head'}, h('span', {text: 'Playback Stats'}),
+      h('button', {class: 'ctl', 'aria-label': 'Close stats', title: 'Close (S)', onclick: () => toggleStats()}, icon('close'))),
+    statsBody);
+  const player = h('div', {class: `player cc-${storageGet('martube.captionSize', 'm')}`}, video,
+    h('div', {class: 'player-top'},
+      h('button', {class: 'btn btn-icon btn-glass glass', 'aria-label': 'Back', title: 'Back', onclick: back}, icon('left')),
+      h('div', {class: 'player-heading'}, eyebrow, titleText, metaLine), infoButton),
+    centre, osd, stats, controls, pop, panel);
   view.replaceChildren(player);
 
-  let hls = null, info = null, saveTimer = null, idleTimer = null, nextTimer = null, windowFullscreen = false, scrubbing = false;
-  let subtitleTrack = null;
+  let hls = null, info = null, saveTimer = null, idleTimer = null, nextTimer = null, osdTimer = null, clickTimer = null;
+  let statsTimer = null, windowFullscreen = false, scrubbing = false, panelName = null, popBuilder = null;
+  let subtitleTrack = null, subtitleDelay = 0, titlePromise = null;
+  let showRemaining = storageGet('martube.remaining', false);
+  const originalCues = new WeakMap();
 
-  const seek = seconds => { if (isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration - 0.5, seconds)); };
-  const togglePlay = () => (video.paused ? video.play() : video.pause());
+  const duration = () => (isFinite(video.duration) ? video.duration : 0);
+  const seek = seconds => { if (duration()) video.currentTime = Math.max(0, Math.min(duration() - 0.5, seconds)); };
+  const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pause());
+  const togglePlayFlash = () => { togglePlay(); flash(video.paused ? 'pause' : 'play'); };
+  const isEpisode = () => Boolean(info && info.details && info.details.kind === 'series' && info.details.season);
   const saveProgress = useBeacon => {
-    if (!info || !video.duration || !isFinite(video.duration)) return;
+    if (!info || !duration()) return;
     const body = {url: info.url, position: video.currentTime, duration: video.duration};
     if (useBeacon) navigator.sendBeacon('/api/progress', new Blob([JSON.stringify(body)], {type: 'application/json'}));
     else api('/api/progress', body).catch(() => {});
   };
+
+  /** A short message in the middle of the picture, e.g. "+10 s" or "Volume 80%". */
+  const flash = (name, text) => {
+    fill(osd, name ? icon(name) : null, text ? h('span', {text}) : null);
+    osd.hidden = false;
+    osd.classList.remove('fade');
+    void osd.offsetWidth; // restart the pop-in animation
+    clearTimeout(osdTimer);
+    osdTimer = setTimeout(() => { osd.classList.add('fade'); osdTimer = setTimeout(() => { osd.hidden = true; }, 400); }, 650);
+  };
+  const skip = seconds => {
+    seek(video.currentTime + seconds);
+    flash(seconds < 0 ? 'back10' : 'fwd10', `${seconds > 0 ? '+' : '−'}${Math.abs(seconds)} s`);
+  };
+  const setVolume = value => {
+    video.volume = Math.min(1, Math.max(0, value));
+    video.muted = false;
+    flash(video.volume ? 'volume' : 'mute', `${Math.round(video.volume * 100)}%`);
+  };
+  const toggleMute = () => { video.muted = !video.muted; flash(video.muted ? 'mute' : 'volume', video.muted ? 'Muted' : `${Math.round(video.volume * 100)}%`); };
+  const setSpeed = rate => { video.playbackRate = rate; flash(null, `Speed ${speedLabel(rate)}`); drawTime(); };
+  const stepSpeed = direction => {
+    const index = SPEEDS.indexOf(video.playbackRate);
+    const next = SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, (index < 0 ? SPEEDS.indexOf(1) : index) + direction))];
+    setSpeed(next);
+  };
+  const frameStep = direction => {
+    if (!video.paused) video.pause();
+    seek(video.currentTime + direction / 24);
+  };
+
   const isFullscreen = () => windowFullscreen || Boolean(document.fullscreenElement);
   const drawFullscreen = () => fullscreenButton.replaceChildren(icon(isFullscreen() ? 'collapse' : 'expand'));
   const toggleFullscreen = () => {
@@ -1113,7 +1193,12 @@ async function renderPlayer(match, token) {
       desktop().toggle_fullscreen();
       drawFullscreen();
     } else if (document.fullscreenElement) document.exitFullscreen();
-    else player.requestFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {}); // the whole page, so toasts still show
+  };
+  const togglePip = () => {
+    if (!document.pictureInPictureEnabled) return;
+    (document.pictureInPictureElement ? document.exitPictureInPicture() : video.requestPictureInPicture())
+      .catch(error => toast(`Picture in picture is unavailable: ${error.message}`));
   };
   const showMessage = (text, withRetry) => {
     centre.hidden = false;
@@ -1128,19 +1213,252 @@ async function renderPlayer(match, token) {
     centre.hidden = !on;
   };
   const goNext = () => { if (info && info.next) location.replace(watchHref(info.next.url)); };
-  const setCaptions = on => {
+  const wake = () => {
+    player.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!video.paused && !scrubbing && pop.hidden && panel.hidden) player.classList.add('idle');
+    }, 3000);
+  };
+
+  // ---------- Subtitles: on/off, size and timing ----------
+  const setCaptions = (on, announce) => {
     if (!subtitleTrack) return;
     subtitleTrack.track.mode = on ? 'showing' : 'hidden';
     captionsButton.classList.toggle('off', !on);
     storageSet('martube.captions', on);
+    if (announce) flash('captions', on ? 'Subtitles on' : 'Subtitles off');
+    drawMeta();
   };
-  const wake = () => {
-    player.classList.remove('idle');
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (!video.paused && !scrubbing) player.classList.add('idle'); }, 3000);
+  const captionsOn = () => Boolean(subtitleTrack && subtitleTrack.track.mode === 'showing');
+  const setCaptionSize = size => {
+    CAPTION_SIZES.forEach(([key]) => player.classList.remove(`cc-${key}`));
+    player.classList.add(`cc-${size}`);
+    storageSet('martube.captionSize', size);
+  };
+  const applySubtitleDelay = () => {
+    const cues = subtitleTrack && subtitleTrack.track.cues;
+    if (!cues) return;
+    for (const cue of Array.from(cues)) {
+      if (!originalCues.has(cue)) originalCues.set(cue, [cue.startTime, cue.endTime]);
+      const [start, end] = originalCues.get(cue);
+      cue.startTime = Math.max(0, start + subtitleDelay);
+      cue.endTime = Math.max(0.05, end + subtitleDelay);
+    }
+  };
+  const shiftSubtitles = seconds => {
+    if (!subtitleTrack) return;
+    subtitleDelay = seconds === null ? 0 : Math.round((subtitleDelay + seconds) * 100) / 100;
+    applySubtitleDelay();
+    flash('captions', subtitleDelay ? `Subtitles ${signedSeconds(subtitleDelay)}` : 'Subtitle timing reset');
+    refreshPop();
   };
 
-  // Scrubbing: click or drag along the bar; hovering shows the time under the pointer.
+  // ---------- Pop-over menus (settings, subtitles) inside the player, so they work in full screen ----------
+  const closePop = () => { pop.hidden = true; popBuilder = null; wake(); };
+  const refreshPop = () => { if (popBuilder) fill(pop, popBuilder()); };
+  const openPop = (anchor, builder) => {
+    if (popBuilder === builder) return closePop();
+    popBuilder = builder;
+    refreshPop();
+    pop.hidden = false;
+    const box = anchor.getBoundingClientRect(), frame = player.getBoundingClientRect();
+    pop.style.right = `${Math.max(12, frame.right - box.right - 8)}px`;
+    pop.style.bottom = `${frame.bottom - box.top + 14}px`;
+  };
+  const segmented = (options, isOn, choose) => h('div', {class: 'seg'},
+    options.map(([value, label]) => h('button', {class: isOn(value) ? 'on' : '', onclick: () => { choose(value); refreshPop(); }}, label)));
+  const popRow = (iconName, label, key, checked, action) => h('button', {class: 'pop-row', onclick: action},
+    icon(iconName), h('span', {class: 'grow', text: label}), checked ? icon('check', 'check') : null, key ? h('kbd', {text: key}) : null);
+  const settingsMenu = () => [
+    h('div', {class: 'pop-title', text: 'Playback Speed'}),
+    segmented(SPEEDS.map(rate => [rate, rate === 1 ? '1×' : `${rate}`]), rate => video.playbackRate === rate, setSpeed),
+    h('hr'),
+    popRow('stats', 'Playback stats', 'S', !stats.hidden, toggleStats),
+    popRow('keyboard', 'Keyboard shortcuts', '?', false, () => { closePop(); openPanel('keys'); }),
+  ];
+  const captionsMenu = () => [
+    h('div', {class: 'pop-title', text: 'Subtitles'}),
+    segmented([[false, 'Off'], [true, 'Indonesian']], on => captionsOn() === on, on => setCaptions(on)),
+    h('div', {class: 'pop-title', text: 'Text Size'}),
+    segmented(CAPTION_SIZES, size => player.classList.contains(`cc-${size}`), setCaptionSize),
+    h('div', {class: 'pop-title', text: 'Timing'}),
+    h('div', {class: 'stepper'},
+      h('button', {class: 'btn btn-glass glass small', title: 'Earlier ([)', onclick: () => shiftSubtitles(-0.25)}, '−0.25 s'),
+      h('output', {text: subtitleDelay ? signedSeconds(subtitleDelay) : 'In sync'}),
+      h('button', {class: 'btn btn-glass glass small', title: 'Later (])', onclick: () => shiftSubtitles(0.25)}, '+0.25 s')),
+    subtitleDelay ? h('button', {class: 'btn btn-plain', onclick: () => shiftSubtitles(null)}, 'Reset timing') : null,
+  ];
+
+  // ---------- Side panel: details, episodes, shortcuts ----------
+  const titleDetails = () => {
+    const d = info && info.details;
+    if (!d || !d.slug) return Promise.resolve(null);
+    titlePromise = titlePromise || api(`/api/title/${d.kind}/${d.slug}`).catch(() => null);
+    return titlePromise;
+  };
+  const closePanel = () => {
+    panel.hidden = true;
+    panelName = null;
+    infoButton.classList.remove('on');
+    episodesButton.classList.remove('on');
+    wake();
+  };
+  const openPanel = name => {
+    if (panelName === name) return closePanel();
+    const builders = {info: infoPanel, episodes: episodesPanel, keys: keysPanel};
+    if (!builders[name] || !info) return;
+    closePop();
+    panelName = name;
+    infoButton.classList.toggle('on', name === 'info');
+    episodesButton.classList.toggle('on', name === 'episodes');
+    const titles = {info: 'Details', episodes: 'Episodes', keys: 'Keyboard Shortcuts'};
+    fill(panel, h('div', {class: 'panel-head'}, h('h2', {class: 'title-3', text: titles[name]}),
+      h('button', {class: 'ctl', 'aria-label': 'Close', title: 'Close (Esc)', onclick: closePanel}, icon('close'))),
+    builders[name]());
+    panel.hidden = false;
+    panel.scrollTop = 0;
+  };
+  const infoPanel = () => {
+    const d = info.details || {};
+    const episode = isEpisode();
+    const extra = h('div', {class: 'panel-tags'});
+    titleDetails().then(title => {
+      if (!title) return;
+      const rating = Number(title.rating) ? `★ ${Number(title.rating).toFixed(1)}` : null;
+      fill(extra, [rating, ...(title.genres || [])].filter(Boolean).map(text => h('span', {class: 'tag', text})));
+      if (title.tagline && !episode) extra.after(h('p', {class: 'panel-tagline', text: title.tagline}));
+    });
+    const height = video.videoHeight;
+    const facts = [
+      ['Source', info.kind === 'local' ? 'Downloaded to this computer' : 'Streaming from IDLIX'],
+      ['Video', height ? `${video.videoWidth} × ${height} (${height}p)` : null],
+      ['Length', duration() ? clock(duration()) : d.runtime ? shortDuration(d.runtime * 60) : null],
+      ['Subtitles', info.subtitle ? 'Indonesian' : 'None'],
+      ['Aired', d.air_date ? shortDate(d.air_date) : null],
+      ['File', d.file], ['Size', d.size ? bytes(d.size) : null],
+      ['Downloaded', d.added_at ? shortDate(new Date(d.added_at * 1000).toISOString()) : null],
+      ['Account', info.kind === 'stream' && info.tier ? `${info.tier[0].toUpperCase()}${info.tier.slice(1)} · up to ${info.max_height || '?'}p` : null],
+    ].filter(([, value]) => value);
+    return [
+      d.art ? h('div', {class: 'art panel-art'}, artImage(d.art, 'w780', '')) : null,
+      h('div', {class: 'eyebrow', text: episode ? `Season ${d.season} · Episode ${d.episode}` : 'Movie'}),
+      h('h3', {class: 'title-2 panel-title', text: (episode ? d.episode_name : d.title) || info.title}),
+      h('div', {class: 'subhead', text: [episode ? d.title : null, d.year].filter(Boolean).join(' · ')}),
+      extra,
+      d.overview ? h('p', {class: 'panel-overview', text: d.overview}) : null,
+      h('dl', {class: 'facts'}, facts.map(([label, value]) => [h('dt', {text: label}), h('dd', {text: value})])),
+      d.slug ? h('a', {class: 'btn btn-glass glass small', href: titleHref(d.kind, d.slug, d.season)},
+        icon('info'), episode ? 'Open Series Page' : 'Open Movie Page') : null,
+    ];
+  };
+  const episodeRow = episode => {
+    const state = episode.state || {};
+    const playing = episode.url === info.url;
+    const playable = episode.has_video || state.media_id;
+    const notes = [playing ? 'Now Playing' : null, state.finished ? 'Watched' : null, state.media_id ? 'Downloaded' : null,
+      episode.runtime ? shortDuration(episode.runtime * 60) : null, playable ? null : 'Not available'].filter(Boolean);
+    return h('button', {class: `ep-row${playing ? ' now' : ''}`, disabled: !playable,
+      onclick: () => (playing ? closePanel() : location.replace(watchHref(episode.url)))},
+    h('div', {class: 'art ep-thumb'}, artImage(episode.still_path, 'w500', `E${episode.number}`),
+      playing ? h('div', {class: 'ep-playing'}, icon('play')) : null,
+      miniProgress(state.finished ? 1 : state.position, state.finished ? 1 : state.duration)),
+    h('div', {class: 'ep-text'},
+      h('div', {class: 'ep-name', text: `${episode.number}. ${episode.name}`}),
+      h('div', {class: 'footnote', text: notes.join(' · ')})));
+  };
+  const episodesPanel = () => {
+    const d = info.details;
+    const list = h('div', {class: 'ep-list'});
+    const picker = h('select', {class: 'season-select', 'aria-label': 'Season', hidden: true});
+    const load = async season => {
+      fill(list, h('div', {class: 'panel-loading'}, h('div', {class: 'spinner'})));
+      try {
+        const data = await api(`/api/season/${d.slug}/${season}`);
+        if (panelName !== 'episodes') return;
+        fill(list, data.episodes.length ? data.episodes.map(episodeRow) : h('p', {class: 'footnote', text: 'No episodes yet.'}));
+        list.querySelector('.now')?.scrollIntoView({block: 'center'});
+      } catch (error) {
+        fill(list, h('p', {class: 'footnote', text: `Couldn’t load the episodes. ${error.message}`}));
+      }
+    };
+    picker.addEventListener('change', () => load(Number(picker.value)));
+    titleDetails().then(title => {
+      const seasons = (title && title.seasons) || [];
+      if (seasons.length < 2) return;
+      fill(picker, seasons.map(([number, count]) => h('option', {value: number, selected: number === d.season},
+        `Season ${number}${count ? ` · ${plural(count, 'episode')}` : ''}`)));
+      picker.hidden = false;
+    });
+    load(d.season);
+    return [picker, list];
+  };
+  const keysPanel = () => h('dl', {class: 'keys'},
+    SHORTCUTS.map(([keys, label]) => [h('dt', {}, keys.split(' ').map(key => (['·', '–'].includes(key)
+      ? h('span', {class: 'or', text: key === '·' ? 'or' : 'to'}) : h('kbd', {text: key})))), h('dd', {text: label})]));
+
+  // ---------- Playback stats ----------
+  let lastFrames = null;
+  const drawStats = () => {
+    const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+    let fps = null;
+    if (quality) {
+      const now = performance.now();
+      if (lastFrames && now > lastFrames.at) fps = ((quality.totalVideoFrames - lastFrames.total) * 1000) / (now - lastFrames.at);
+      lastFrames = {total: quality.totalVideoFrames, at: now};
+    }
+    const level = hls && hls.levels ? hls.levels[hls.currentLevel] : null;
+    const size = info && info.details && info.details.size;
+    const bitrate = level ? level.bitrate : size && duration() ? (size * 8) / duration() : 0;
+    const rows = [
+      ['Source', !info ? '—' : info.kind === 'local' ? 'Downloaded file' : 'HLS stream'],
+      ['Resolution', video.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : '—'],
+      ['Frames', quality ? `${quality.totalVideoFrames} shown · ${quality.droppedVideoFrames} dropped` : '—'],
+      ['Frame rate', fps !== null && !video.paused ? `${fps.toFixed(1)} fps` : '—'],
+      ['Buffered', `${bufferedAhead().toFixed(1)} s ahead`],
+      ['Bitrate', bitrate ? `${(bitrate / 1e6).toFixed(2)} Mbps` : '—'],
+      hls ? ['Bandwidth', hls.bandwidthEstimate ? `${(hls.bandwidthEstimate / 1e6).toFixed(1)} Mbps` : '—'] : null,
+      ['Speed', speedLabel(video.playbackRate)],
+      ['Volume', video.muted ? 'Muted' : `${Math.round(video.volume * 100)}%`],
+      ['Subtitles', !subtitleTrack ? 'None' : captionsOn() ? `On${subtitleDelay ? ` · ${signedSeconds(subtitleDelay)}` : ''}` : 'Off'],
+      ['Position', `${video.currentTime.toFixed(2)} / ${duration() ? duration().toFixed(2) : '—'} s`],
+    ].filter(Boolean);
+    fill(statsBody, rows.map(([label, value]) => h('div', {class: 'stats-row'}, h('span', {text: label}), h('span', {text: value}))));
+  };
+  const toggleStats = () => {
+    stats.hidden = !stats.hidden;
+    clearInterval(statsTimer);
+    lastFrames = null;
+    if (!stats.hidden) { drawStats(); statsTimer = setInterval(drawStats, 1000); }
+    refreshPop();
+  };
+
+  // ---------- Heading badges ----------
+  const drawMeta = () => {
+    if (!info) return;
+    const d = info.details || {};
+    const height = video.videoHeight || (/x(\d+)$/.exec(info.quality || '') || [])[1];
+    const badges = [
+      isEpisode() ? h('span', {text: `S${d.season} · E${d.episode}`}) : null,
+      d.year ? h('span', {text: d.year}) : null,
+      height ? h('span', {class: 'pill', text: Number(height) >= 1080 ? `HD ${height}p` : `${height}p`}) : null,
+      subtitleTrack ? h('span', {class: `pill${captionsOn() ? '' : ' dim'}`, text: 'CC'}) : null,
+      h('span', {class: 'source'}, icon(info.kind === 'local' ? 'download' : 'link'), info.kind === 'local' ? 'Downloaded' : 'Streaming'),
+    ];
+    fill(metaLine, badges);
+    // Guests get 720p; when the title has more, offer the sign-in that unlocks it.
+    if (info.kind === 'stream' && info.tier === 'guest' && info.best_height > (info.max_height || 0)) {
+      metaLine.append(h('button', {class: 'quality-hint', onclick: async () => {
+        video.pause();
+        if (await accountSheet() && account.signed_in) {
+          toast(`Restarting in up to ${info.best_height}p…`);
+          route();
+        }
+      }}, `Sign in for ${info.best_height}p`));
+    }
+  };
+
+  // ---------- Scrubbing: click or drag along the bar; hovering shows the time under the pointer ----------
   const fractionAt = event => {
     const box = scrubber.getBoundingClientRect();
     return Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
@@ -1148,45 +1466,65 @@ async function renderPlayer(match, token) {
   scrubber.addEventListener('pointerdown', event => {
     scrubbing = true;
     scrubber.setPointerCapture(event.pointerId);
-    seek(fractionAt(event) * video.duration);
+    seek(fractionAt(event) * duration());
   });
   scrubber.addEventListener('pointermove', event => {
     const fraction = fractionAt(event);
-    if (isFinite(video.duration)) {
-      tip.hidden = false;
-      tip.textContent = clock(fraction * video.duration);
-      tip.style.left = `${fraction * 100}%`;
-      if (scrubbing) seek(fraction * video.duration);
-    }
+    if (!duration()) return;
+    const at = fraction * duration();
+    tip.hidden = false;
+    fill(tip, h('strong', {text: clock(at)}), h('span', {text: ` · −${clock(duration() - at)}`}));
+    tip.style.left = `${Math.min(Math.max(fraction * 100, 4), 96)}%`;
+    hoverFill.style.width = `${fraction * 100}%`;
+    if (scrubbing) seek(at);
   });
   scrubber.addEventListener('pointerup', () => { scrubbing = false; });
-  scrubber.addEventListener('pointerleave', () => { tip.hidden = true; });
+  scrubber.addEventListener('pointerleave', () => { tip.hidden = true; hoverFill.style.width = '0'; });
 
+  const bufferedAhead = () => {
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= video.currentTime + 0.5 && video.currentTime <= video.buffered.end(i)) {
+        return video.buffered.end(i) - video.currentTime;
+      }
+    }
+    return 0;
+  };
   const drawTime = () => {
-    const duration = isFinite(video.duration) ? video.duration : 0;
-    const fraction = duration ? video.currentTime / duration : 0;
+    const total = duration();
+    const fraction = total ? video.currentTime / total : 0;
     played.style.width = `${fraction * 100}%`;
     knob.style.left = `${fraction * 100}%`;
     scrubber.setAttribute('aria-valuenow', String(Math.round(video.currentTime)));
-    timeText.textContent = `${clock(video.currentTime)} / ${clock(duration)}`;
-    if (duration && video.buffered.length) {
-      for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= video.currentTime && video.currentTime <= video.buffered.end(i)) {
-          buffered.style.width = `${(video.buffered.end(i) / duration) * 100}%`;
-        }
-      }
-    }
+    scrubber.setAttribute('aria-valuetext', `${clock(video.currentTime)} of ${clock(total)}`);
+    timeButton.textContent = showRemaining && total
+      ? `−${clock(total - video.currentTime)}` : `${clock(video.currentTime)} / ${clock(total)}`;
+    endsText.textContent = total ? `Ends at ${clockTime(new Date(Date.now() + ((total - video.currentTime) * 1000) / (video.playbackRate || 1)))}` : '';
+    buffered.style.width = total ? `${((video.currentTime + bufferedAhead()) / total) * 100}%` : '0';
   };
 
   const onKey = event => {
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.target.matches('input, textarea, select') && event.target !== volume) return;
     const keys = {
-      ' ': togglePlay, k: togglePlay, ArrowLeft: () => seek(video.currentTime - 10), ArrowRight: () => seek(video.currentTime + 10),
-      ArrowUp: () => { video.volume = Math.min(1, video.volume + 0.1); }, ArrowDown: () => { video.volume = Math.max(0, video.volume - 0.1); },
-      f: toggleFullscreen, m: () => { video.muted = !video.muted; }, n: goNext,
-      c: () => setCaptions(subtitleTrack && subtitleTrack.track.mode !== 'showing'),
-      Escape: () => (windowFullscreen ? toggleFullscreen() : document.fullscreenElement ? null : back()),
+      ' ': togglePlayFlash, k: togglePlayFlash,
+      ArrowLeft: () => skip(event.shiftKey ? -30 : -10), ArrowRight: () => skip(event.shiftKey ? 30 : 10),
+      j: () => skip(-10), l: () => skip(10), ',': () => frameStep(-1), '.': () => frameStep(1),
+      Home: () => seek(0), End: () => seek(duration()),
+      ArrowUp: () => setVolume(video.volume + 0.05), ArrowDown: () => setVolume(video.volume - 0.05),
+      m: toggleMute, f: toggleFullscreen, p: togglePip, n: goNext, '<': () => stepSpeed(-1), '>': () => stepSpeed(1),
+      c: () => setCaptions(!captionsOn(), true), '[': () => shiftSubtitles(-0.25), ']': () => shiftSubtitles(0.25),
+      i: () => openPanel('info'), e: () => { if (!episodesButton.hidden) openPanel('episodes'); },
+      s: toggleStats, '?': () => openPanel('keys'),
+      Escape: () => (!pop.hidden ? closePop() : panelName ? closePanel()
+        : windowFullscreen ? toggleFullscreen() : document.fullscreenElement ? null : back()),
     };
+    if (/^[0-9]$/.test(event.key) && duration()) {
+      event.preventDefault();
+      seek((Number(event.key) / 10) * duration());
+      flash(null, `${Number(event.key) * 10}%`);
+      wake();
+      return;
+    }
     const action = keys[event.key] || keys[event.key.toLowerCase()];
     if (action) { event.preventDefault(); action(); wake(); }
   };
@@ -1195,37 +1533,64 @@ async function renderPlayer(match, token) {
     if (desktop() && document.fullscreenElement) { document.exitFullscreen(); toggleFullscreen(); }
     drawFullscreen();
   };
+  // Clicks outside an open menu close it (but not the click that opened it).
+  const onPointerDown = event => {
+    if (!pop.hidden && !pop.contains(event.target) && !event.target.closest('[data-pop]')) closePop();
+  };
 
   playButton.addEventListener('click', togglePlay);
-  captionsButton.addEventListener('click', () => setCaptions(subtitleTrack.track.mode !== 'showing'));
-  muteButton.addEventListener('click', () => { video.muted = !video.muted; });
+  captionsButton.addEventListener('click', () => openPop(captionsButton, captionsMenu));
+  settingsButton.addEventListener('click', () => openPop(settingsButton, settingsMenu));
+  episodesButton.addEventListener('click', () => openPanel('episodes'));
+  infoButton.addEventListener('click', () => openPanel('info'));
+  muteButton.addEventListener('click', toggleMute);
   volume.addEventListener('input', () => { video.volume = Number(volume.value); video.muted = false; });
+  timeButton.addEventListener('click', () => {
+    showRemaining = !showRemaining;
+    storageSet('martube.remaining', showRemaining);
+    timeButton.title = showRemaining ? 'Show elapsed time' : 'Show remaining time';
+    drawTime();
+  });
+  pipButton.addEventListener('click', togglePip);
   fullscreenButton.addEventListener('click', toggleFullscreen);
   nextButton.addEventListener('click', goNext);
-  video.addEventListener('click', togglePlay);
-  video.addEventListener('dblclick', toggleFullscreen);
-  video.addEventListener('play', () => playButton.replaceChildren(icon('pause')));
-  video.addEventListener('pause', () => { playButton.replaceChildren(icon('play')); saveProgress(false); wake(); });
+  // A single click plays or pauses; a double click goes full screen without also pausing.
+  video.addEventListener('click', () => {
+    if (!pop.hidden) return closePop();
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(togglePlayFlash, 220);
+  });
+  video.addEventListener('dblclick', () => { clearTimeout(clickTimer); toggleFullscreen(); });
+  video.addEventListener('play', () => { playButton.replaceChildren(icon('pause')); playButton.title = 'Pause (K)'; });
+  video.addEventListener('pause', () => { playButton.replaceChildren(icon('play')); playButton.title = 'Play (K)'; saveProgress(false); wake(); });
   video.addEventListener('volumechange', () => {
     muteButton.replaceChildren(icon(video.muted || !video.volume ? 'mute' : 'volume'));
     volume.value = video.muted ? 0 : video.volume;
+    volume.style.setProperty('--level', `${(video.muted ? 0 : video.volume) * 100}%`);
     storageSet('martube.volume', video.volume);
   });
   video.addEventListener('timeupdate', drawTime);
   video.addEventListener('progress', drawTime);
   video.addEventListener('durationchange', drawTime);
+  video.addEventListener('ratechange', drawTime);
   video.addEventListener('waiting', () => showBuffering(true));
   video.addEventListener('playing', () => { showBuffering(false); wake(); });
+  video.addEventListener('resize', drawMeta); // the picture size is known (or changed quality)
   video.volume = storageGet('martube.volume', 1);
   volume.value = video.volume;
+  volume.style.setProperty('--level', `${video.volume * 100}%`);
+  timeButton.title = showRemaining ? 'Show elapsed time' : 'Show remaining time';
   document.addEventListener('keydown', onKey);
   document.addEventListener('fullscreenchange', onFullscreenChange);
+  player.addEventListener('pointerdown', onPointerDown, true);
   player.addEventListener('pointermove', wake);
   onLeave(() => {
     saveProgress(true);
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('fullscreenchange', onFullscreenChange);
-    clearInterval(saveTimer); clearTimeout(idleTimer); clearInterval(nextTimer);
+    clearInterval(saveTimer); clearTimeout(idleTimer); clearInterval(nextTimer); clearInterval(statsTimer);
+    clearTimeout(osdTimer); clearTimeout(clickTimer);
+    if (document.pictureInPictureElement === video) document.exitPictureInPicture().catch(() => {});
     if (hls) hls.destroy();
     video.removeAttribute('src'); video.load();
     if (windowFullscreen && desktop()) desktop().toggle_fullscreen();
@@ -1244,28 +1609,30 @@ async function renderPlayer(match, token) {
   }
   if (!current(token)) return;
 
-  titleText.textContent = info.series || info.title;
-  subText.textContent = [info.series ? info.title.replace(`${info.series} `, '').replace(/^S(\d+)E(\d+) - /, 'S$1, E$2 · ') : null,
-    info.kind === 'local' ? 'Downloaded' : /x\d+$/.test(info.quality || '') ? `Streaming · ${info.quality.split('x')[1]}p` : 'Streaming'].filter(Boolean).join(' · ');
-  // Guests get 720p; when the title has more, offer the sign-in that unlocks it.
-  if (info.kind === 'stream' && info.tier === 'guest' && info.best_height > (info.max_height || 0)) {
-    subText.append(h('button', {class: 'quality-hint', onclick: async () => {
-      video.pause();
-      if (await accountSheet() && account.signed_in) {
-        toast(`Restarting in up to ${info.best_height}p…`);
-        route();
-      }
-    }}, `Sign in for ${info.best_height}p`));
+  const d = info.details || {};
+  if (isEpisode()) {
+    eyebrow.textContent = d.title;
+    titleText.textContent = d.episode_name || info.title;
+  } else {
+    eyebrow.textContent = d.slug ? 'Movie' : '';
+    titleText.textContent = d.title || info.title;
   }
+  eyebrow.hidden = !eyebrow.textContent;
+  document.title = `${titleText.textContent} · MarTube`;
+  onLeave(() => { document.title = 'MarTube'; });
+  infoButton.hidden = false;
+  episodesButton.hidden = !(isEpisode() && d.slug);
   if (info.next) {
     nextButton.hidden = false;
     nextButton.title = `${info.next.title} (N)`;
   }
   if (info.subtitle) {
     subtitleTrack = h('track', {kind: 'subtitles', srclang: 'id', label: 'Indonesian', src: info.subtitle, default: true});
+    subtitleTrack.addEventListener('load', applySubtitleDelay);
     video.append(subtitleTrack);
     captionsButton.hidden = false;
   }
+  drawMeta();
 
   if (info.kind === 'stream' && window.Hls && Hls.isSupported()) {
     hls = new Hls({maxBufferLength: 60});
@@ -1275,6 +1642,7 @@ async function renderPlayer(match, token) {
       else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
       else showMessage(`Playback stopped (${data.details}).`, true);
     });
+    hls.on(Hls.Events.LEVEL_SWITCHED, drawMeta);
     hls.loadSource(info.src);
     hls.attachMedia(video);
   } else {
@@ -1284,6 +1652,7 @@ async function renderPlayer(match, token) {
   video.addEventListener('loadedmetadata', () => {
     // hls.js disables text tracks it does not manage; restore the viewer's choice once.
     setCaptions(storageGet('martube.captions', true));
+    drawMeta();
     if (info.resume && info.resume < video.duration - 10) {
       video.currentTime = info.resume;
       toast(`Resumed from ${clock(info.resume)}`, 'Start Over', () => { video.currentTime = 0; });

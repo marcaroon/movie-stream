@@ -15,6 +15,8 @@ from loguru import logger
 
 
 BASE = 'https://z2.idlixku.com/'
+SEGMENT_ATTEMPTS = 4  # tries per media segment when the proxy fetches it for ffmpeg
+SKIPPED_SEGMENT = re.compile(r'Segment \d+ of playlist \d+ failed too many times, skipping')
 
 
 def safe_name(title):
@@ -275,10 +277,14 @@ class ModernIdlix:
             self.redeem()
 
     def redeem(self):
-        target = urlsplit(self.claim['redeemUrl'])
-        if target.scheme != 'https' or target.username or target.password:
+        # IDLIX gives either a full URL or a path under its API (e.g. /watch/session/redeem).
+        endpoint = self.claim['redeemUrl']
+        if not urlsplit(endpoint).scheme:
+            endpoint = urljoin(BASE + 'api/', endpoint.lstrip('/'))
+        target = urlsplit(endpoint)
+        if target.scheme != 'https' or not target.hostname or target.username or target.password:
             raise ValueError('Invalid playback endpoint')
-        response = self.request.post(self.claim['redeemUrl'], json={
+        response = self.request.post(endpoint, json={
             'claim': self.claim['claim'], 'mode': 'browser',
         }, timeout=20)
         if response.status_code != 200:
@@ -288,8 +294,12 @@ class ModernIdlix:
             raise ValueError('Playback server did not return a stream')
         signed_url(source['url'], source['url'])
         self.source = source
-        # TTL uses a monotonic clock, independent of the computer's date/time.
-        self.refresh_at = time.monotonic() + max(1, source['ttlSeconds'] - 60)
+        # TTL uses a monotonic clock, independent of the computer's date/time. Newer responses
+        # only give an expiry time; capped at an hour in case this computer's clock is off.
+        ttl = source.get('ttlSeconds')
+        if ttl is None:
+            ttl = min(3600, source.get('expiresAt', 0) - time.time()) if source.get('expiresAt') else 600
+        self.refresh_at = time.monotonic() + max(30, ttl - 60)
 
     def current_source(self):
         with self.lock:
@@ -343,11 +353,15 @@ class ModernIdlix:
         if self.cancelled:
             raise ValueError('Download cancelled')
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        # Segments are spread over many CDN hosts, and ffmpeg's own TLS on Windows rejects some
+        # of them; it then silently skips those segments, leaving gaps that make the video stall
+        # and drift out of sync. So the proxy fetches every segment itself and hands ffmpeg bytes.
+        self.proxy.relay = True
         logger.info(f'Downloading video and audio to {path.name} ...')
         process = self.process = subprocess.Popen([
-            'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-n',
+            'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'warning', '-n',
             '-progress', 'pipe:1', '-nostats',
-            '-allowed_extensions', 'ALL', '-extension_picky', '0',
+            '-allowed_extensions', 'ALL', '-extension_picky', '0', '-http_persistent', '0',
             '-i', url, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
             '-movflags', '+faststart', str(partial),
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors='replace',
@@ -372,6 +386,10 @@ class ModernIdlix:
             if process.returncode:
                 detail = ''.join(errors).strip()[-300:]
                 raise ValueError(f'FFmpeg failed (exit {process.returncode}): {detail}')
+            skipped = len(SKIPPED_SEGMENT.findall(''.join(errors)))
+            if skipped:
+                # A file with missing segments stutters and loses audio/video sync; don't keep it.
+                raise ValueError(f'{skipped} part(s) of the video could not be downloaded; try again later')
             partial.rename(path)
         except BaseException:
             # A copied HLS stream cannot be resumed, and a leftover part file would block a retry.
@@ -433,6 +451,10 @@ class MediaProxy:
         self.prefix = '/' + uuid.uuid4().hex
         self.quality = 'source'
         self.duration = 0
+        # Downloads: fetch segments here (browser-grade TLS, retries) instead of redirecting
+        # ffmpeg to the CDN. The in-app player keeps the redirect and loads segments itself.
+        self.relay = False
+        self.sessions = []  # idle HTTP sessions for relayed segments (one per concurrent request)
         # The app's player page (another loopback port) may read this proxy; nothing else may.
         self.allowed_origins = set()
         proxy = self
@@ -453,6 +475,14 @@ class MediaProxy:
                         url, playlist = proxy.routes[self.path]
                         if playlist:
                             data = proxy.playlist(url)
+                        elif proxy.relay:
+                            data = proxy.fetch(url)
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/octet-stream')
+                            self.send_header('Content-Length', str(len(data)))
+                            self.end_headers()
+                            self.wfile.write(data)
+                            return
                         else:
                             source = client.current_source()
                             self.send_response(302)
@@ -532,6 +562,31 @@ class MediaProxy:
                     key.uri = self.route(urljoin(remote, key.uri), False)
         return parsed.dumps().encode('utf-8')
 
+    def fetch(self, url):
+        """Download one media segment, re-signing and retrying on failure."""
+        with self.lock:
+            session = self.sessions.pop() if self.sessions else None
+        if session is None:
+            session = requests.Session(impersonate='chrome124', headers=dict(self.client.request.headers))
+        try:
+            for attempt in range(SEGMENT_ATTEMPTS):
+                try:
+                    response = session.get(signed_url(url, self.client.current_source()['url']), timeout=30)
+                    response.raise_for_status()
+                    return response.content
+                except Exception as error:
+                    if attempt == SEGMENT_ATTEMPTS - 1:
+                        raise
+                    logger.debug(f'Segment fetch failed ({type(error).__name__}); retrying')
+                    time.sleep(1 + attempt)
+        finally:
+            with self.lock:
+                self.sessions.append(session)
+
     def close(self):
         self.server.shutdown()
         self.server.server_close()
+        with self.lock:
+            sessions, self.sessions = self.sessions, []
+        for session in sessions:
+            session.close()
