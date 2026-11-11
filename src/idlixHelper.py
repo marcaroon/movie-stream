@@ -205,10 +205,10 @@ class IdlixHelper:
                 'message': str(error_get_subtitle)
             }
 
-    def save_subtitle(self):
+    def save_subtitle(self, srt=True):
         """Download the subtitle next to the video, plus an .srt copy for players without WebVTT."""
         result = self.get_subtitle()
-        if result.get('status') and result['subtitle'].endswith('.vtt'):
+        if srt and result.get('status') and result['subtitle'].endswith('.vtt'):
             try:
                 self.convert_vtt_to_srt(result['subtitle'])
                 result['srt'] = str(Path(result['subtitle']).with_suffix('.srt'))

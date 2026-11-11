@@ -71,6 +71,8 @@ class DownloadManager:
         self.limit = limit
         self.download_dir = download_dir  # read when a job starts
         self.retry_delays = retry_delays
+        self.subtitles = True  # save the subtitle next to each video (a setting)
+        self.srt_copy = True   # ...plus an .srt copy for players without WebVTT
         self.jobs = {}
         self.pending = deque()
         self.active = 0
@@ -237,8 +239,10 @@ class DownloadManager:
 
     def _subtitle(self, job, helper):
         """Save the subtitle next to the video; a missing subtitle never fails the job."""
+        if not self.subtitles:
+            return 'subtitles off', None
         self._update(job, detail='Downloading subtitle...')
-        subtitle = retry(helper.save_subtitle)
+        subtitle = retry(helper.save_subtitle, srt=self.srt_copy)
         if subtitle.get('status'):
             logger.success(f"Subtitle: {subtitle['subtitle']}" + (' (+ .srt)' if subtitle.get('srt') else ''))
             return 'subtitle saved', subtitle['subtitle']

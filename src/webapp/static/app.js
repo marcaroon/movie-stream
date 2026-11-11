@@ -62,6 +62,10 @@ const ICONS = {
   refresh: '<path d="M19 12a7 7 0 1 1-2.1-5"/><path d="M19 4.5v4h-4"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  user: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.8 19.5a7.2 7.2 0 0 1 14.4 0"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2L5.5 5.5"/><circle cx="12" cy="12" r="6.6"/>',
+  disk: '<rect x="3.5" y="6" width="17" height="12" rx="2.5"/><path d="M3.5 13.5h17"/><circle cx="16.8" cy="15.9" r=".7" fill="currentColor"/>',
+  sparkle: '<path d="M12 3.5l1.9 5.2 5.1 1.9-5.1 1.9L12 17.7l-1.9-5.2-5.1-1.9 5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>',
   sliders: '<path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9"/><circle cx="15" cy="7.5" r="2.2"/><circle cx="9" cy="16.5" r="2.2"/>',
   pip: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11.5" width="6.5" height="5" rx="1.2" fill="currentColor" stroke="none"/>',
   episodes: '<rect x="3.5" y="5" width="6.5" height="5" rx="1.2"/><rect x="3.5" y="14" width="6.5" height="5" rx="1.2"/><path d="M13.5 6.5h7M13.5 9h4.5M13.5 15.5h7M13.5 18h4.5"/>',
@@ -339,6 +343,7 @@ const routes = [
   [/^#\/library(?:\?(.*))?$/, renderLibrary, 'library'],
   [/^#\/downloads$/, renderDownloads, 'downloads'],
   [/^#\/watch\?(.*)$/, renderPlayer, null],
+  [/^#\/settings(?:\?(.*))?$/, renderSettings, 'settings'],
 ];
 
 async function route() {
@@ -351,6 +356,7 @@ async function route() {
     const match = hash.match(pattern);
     if (!match) continue;
     document.querySelectorAll('[data-nav]').forEach(link => link.classList.toggle('active', link.dataset.nav === nav));
+    accountButton.classList.toggle('on', nav === 'settings');
     window.scrollTo(0, 0);
     try {
       await render(match, token);
@@ -865,24 +871,6 @@ async function followingTab(data) {
 async function storageTab(data) {
   const storage = data.storage;
   const share = storage.used + storage.free ? (storage.used / (storage.used + storage.free)) * 100 : 0;
-  const autoNext = h('input', {type: 'checkbox', class: 'switch', checked: data.prefs.auto_next_download, 'aria-label': 'Download next episode'});
-  autoNext.addEventListener('change', () => api('/api/prefs', {auto_next_download: autoNext.checked})
-    .then(() => toast(autoNext.checked ? 'The next episode will download when you finish one' : 'Smart downloads off')));
-  const deleteAfter = h('select', {class: 'select', 'aria-label': 'Remove watched downloads'},
-    data.delete_choices.map(days => h('option', {value: days, text: days ? `After ${plural(days, 'day')}` : 'Never'})));
-  deleteAfter.value = String(data.prefs.delete_watched_after_days);
-  deleteAfter.addEventListener('change', async () => {
-    const days = Number(deleteAfter.value);
-    if (days && !await dialog({title: 'Remove Watched Downloads?',
-      message: `Downloads you finish watching will be deleted from this computer ${plural(days, 'day')} later.`,
-      confirm: 'Turn On', destructive: true})) {
-      deleteAfter.value = String(data.prefs.delete_watched_after_days);
-      return;
-    }
-    data.prefs = await api('/api/prefs', {delete_watched_after_days: days});
-    toast(days ? `Watched downloads are removed after ${plural(days, 'day')}` : 'Automatic removal off');
-  });
-
   const remove = async item => {
     if (!await dialog({title: 'Delete Download?', message: `“${item.display_title}” (${bytes(item.size_bytes)}) will be removed from this computer.`,
       confirm: 'Delete', destructive: true})) return;
@@ -929,16 +917,15 @@ async function storageTab(data) {
         h('span', {}, h('strong', {text: bytes(storage.used)}), ' used by MarTube'),
         h('span', {}, h('strong', {text: bytes(storage.free)}), ' available'))),
     h('div', {class: 'panel'},
-      h('h2', {class: 'title-3 panel-title', text: 'Smart Downloads'}),
-      h('label', {class: 'list-row', style: 'cursor:pointer'},
-        h('div', {}, h('div', {class: 'headline', text: 'Download Next Episode'}),
-          h('div', {class: 'footnote', text: 'When you finish an episode, the next one downloads automatically.'})), autoNext),
       h('div', {class: 'list-row'},
-        h('div', {}, h('div', {class: 'headline', text: 'Remove Watched Downloads'}),
-          h('div', {class: 'footnote', text: 'Free up space by deleting downloads you have finished.'})), deleteAfter),
-      storage.watched ? h('div', {class: 'list-row'},
-        h('div', {class: 'footnote', text: `${bytes(storage.watched)} of watched downloads`}),
-        h('button', {class: 'btn btn-glass glass small btn-destructive', onclick: removeWatched}, icon('trash'), 'Delete Watched')) : null),
+        h('div', {}, h('div', {class: 'headline', text: 'Automatic Clean-Up'}),
+          h('div', {class: 'footnote', text: data.prefs.delete_watched_after_days
+            ? `Watched downloads are removed after ${plural(data.prefs.delete_watched_after_days, 'day')}.`
+            : 'Off · watched downloads stay until you delete them.'})),
+        h('div', {class: 'row-actions'},
+          storage.watched ? h('button', {class: 'btn btn-glass glass small btn-destructive', onclick: removeWatched}, icon('trash'),
+            `Delete Watched (${bytes(storage.watched)})`) : null,
+          h('a', {class: 'btn btn-glass glass small', href: '#/settings?section=storage'}, icon('gear'), 'Storage Settings')))),
     h('div', {class: 'panel'},
       h('h2', {class: 'title-3 panel-title', text: 'Downloaded'}),
       files.length ? files : emptyState('No Downloads', 'Movies and episodes you download appear here.')),
@@ -952,39 +939,8 @@ async function storageTab(data) {
 async function renderDownloads(match, token) {
   view.replaceChildren(loading());
   let data = await api('/api/downloads');
-  const server = await api('/api/server').catch(() => ({can_quit: false}));
-  await refreshAccount();
   if (!current(token)) return;
 
-  const folder = h('div', {class: 'footnote', style: 'overflow-wrap:anywhere', text: data.folder});
-  const parallel = h('select', {class: 'select', 'aria-label': 'Simultaneous downloads'},
-    [1, 2, 3, 4, 5].map(n => h('option', {value: n, text: String(n)})));
-  parallel.value = String(data.parallel);
-  parallel.addEventListener('change', () => api('/api/settings', {parallel: Number(parallel.value)}));
-  const changeFolder = async () => {
-    try {
-      let result;
-      if (desktop()) result = await api('/api/folder/choose', {});
-      else {
-        const typed = await dialog({title: 'Download Location', message: 'Enter the full path of the folder for new downloads.',
-          input: folder.textContent, confirm: 'Save'});
-        if (!typed) return;
-        result = await api('/api/folder/set', {folder: typed});
-      }
-      folder.textContent = result.folder;
-      toast('New downloads will be saved there');
-    } catch (error) { toast(error.message); }
-  };
-  const stopServer = async () => {
-    const active = data.jobs.filter(job => !FINISHED.includes(job.status)).length;
-    const ok = await dialog({title: 'Quit MarTube?',
-      message: (active ? `${plural(active, 'unfinished download')} will stop and restart next time.\n` : '')
-        + 'Open MarTube again from its shortcut.', confirm: 'Quit', destructive: true});
-    if (!ok) return;
-    await api('/api/quit', {});
-    clearInterval(timer);
-    view.replaceChildren(h('div', {class: 'page'}, emptyState('MarTube Has Quit', 'Open it again from the MarTube shortcut on your Desktop or Start menu.')));
-  };
   const links = h('textarea', {class: 'field', rows: 3, placeholder: 'Paste movie or episode links, one per line'});
   const addLinks = async () => {
     const items = links.value.split(/\s+/).filter(Boolean).map(url => ({url}));
@@ -995,37 +951,28 @@ async function renderDownloads(match, token) {
     refresh();
   };
   const queue = h('div');
+  const summary = h('span');
+  const drawSummary = () => {
+    const active = data.jobs.filter(job => !FINISHED.includes(job.status)).length;
+    summary.textContent = `${active ? `${plural(active, 'download')} in progress · ` : ''}Up to ${data.parallel} at a time · Saving to ${data.folder} · `;
+  };
 
   view.replaceChildren(h('div', {class: 'page'},
-    h('div', {class: 'page-head'}, h('h1', {class: 'large-title', text: 'Downloads'}),
+    h('div', {class: 'page-head'},
+      h('div', {}, h('h1', {class: 'large-title', text: 'Downloads'}),
+        h('div', {class: 'footnote downloads-summary'}, summary,
+          h('a', {class: 'btn-plain', href: '#/settings?section=downloads', text: 'Change'}))),
       h('div', {class: 'row-actions'},
         h('button', {class: 'btn btn-glass glass small', onclick: async () => { await api('/api/downloads/clear', {}); refresh(); }}, 'Clear Finished'),
-        h('a', {class: 'btn btn-glass glass small', href: '#/library?tab=storage'}, 'Manage Storage'))),
+        h('a', {class: 'btn btn-glass glass small', href: '#/library?tab=storage'}, 'Manage Storage'),
+        h('a', {class: 'btn btn-glass glass small', href: '#/settings?section=downloads'}, icon('gear'), 'Download Settings'))),
     h('div', {class: 'panel'}, queue),
     h('div', {class: 'panel'},
       h('h2', {class: 'title-3 panel-title', text: 'Add from Links'}), links,
-      h('div', {class: 'btn-row', style: 'margin-top:14px'}, h('button', {class: 'btn btn-primary small', onclick: addLinks}, icon('link'), 'Add to Downloads'))),
-    h('div', {class: 'panel'},
-      h('h2', {class: 'title-3 panel-title', text: 'Settings'}),
-      h('div', {class: 'list-row'}, h('div', {style: 'min-width:0'}, h('div', {class: 'headline', text: 'Download Location'}), folder),
-        h('div', {class: 'row-actions'},
-          h('button', {class: 'btn btn-glass glass small', onclick: changeFolder}, 'Change…'),
-          h('button', {class: 'btn btn-glass glass small', onclick: () => api('/api/folder/open', {})}, icon('folder'), 'Show'))),
-      account.available ? h('div', {class: 'list-row'}, h('div', {},
-        h('div', {class: 'headline', text: 'IDLIX Account'}),
-        h('div', {class: 'footnote', text: account.signed_in
-          ? `Signed in as ${accountName(account.user)} · downloads in up to Full HD (1080p)`
-          : 'Not signed in · downloads and streams are limited to 720p'})),
-      h('button', {class: `btn small ${account.signed_in ? 'btn-glass glass' : 'btn-primary'}`,
-        onclick: async () => { if (await accountSheet()) route(); }}, account.signed_in ? 'Manage' : 'Sign In')) : null,
-      h('div', {class: 'list-row'}, h('div', {}, h('div', {class: 'headline', text: 'Simultaneous Downloads'}),
-        h('div', {class: 'footnote', text: 'More at once can be faster, but each one gets less bandwidth.'})), parallel),
-      server.can_quit ? h('div', {class: 'list-row'}, h('div', {},
-        h('div', {class: 'headline', text: 'MarTube Server'}),
-        h('div', {class: 'footnote', text: `Running at ${location.host}. Downloads continue when you close this tab.`})),
-      h('button', {class: 'btn btn-glass glass small btn-destructive', onclick: stopServer}, icon('power'), 'Quit')) : null)));
+      h('div', {class: 'btn-row', style: 'margin-top:14px'}, h('button', {class: 'btn btn-primary small', onclick: addLinks}, icon('link'), 'Add to Downloads')))));
 
   function draw() {
+    drawSummary();
     if (!data.jobs.length) {
       queue.replaceChildren(emptyState('No Downloads', 'Download a movie or episode, or paste links below.'));
       return;
@@ -1074,14 +1021,25 @@ const SHORTCUTS = [
 ];
 const clockTime = date => date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
 const speedLabel = rate => (rate === 1 ? 'Normal' : `${rate}×`);
+/** The skip-back/forward icon with the number of seconds it skips. */
+function skipIcon(seconds) {
+  const svg = icon(seconds < 0 ? 'back10' : 'fwd10');
+  const label = svg.querySelector('text');
+  if (label) label.textContent = String(Math.abs(seconds));
+  return svg;
+}
 const signedSeconds = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(2).replace(/0$/, '')} s`;
 
 async function renderPlayer(match, token) {
   const params = new URLSearchParams(match[1]);
   const request = params.get('media') ? {media_id: Number(params.get('media'))} : {url: params.get('url')};
   document.body.classList.add('watching');
+  onLeave(() => document.body.classList.remove('watching'));
+  await loadPrefs(); // settings may have changed in another window
+  if (!current(token)) return;
 
   const video = h('video', {playsinline: true, preload: 'auto', autoplay: true});
+  const step = appPrefs.skip_seconds;
   const back = () => (history.length > 1 ? history.back() : (location.hash = '#/'));
 
   // Heading: show or movie, episode, and badges for source, quality and subtitles.
@@ -1117,8 +1075,8 @@ async function renderPlayer(match, token) {
   const controls = h('div', {class: 'controls glass dark'}, scrubber,
     h('div', {class: 'control-row'},
       playButton,
-      h('button', {class: 'ctl', 'aria-label': 'Back 10 seconds', title: 'Back 10 seconds (←)', onclick: () => skip(-10)}, icon('back10')),
-      h('button', {class: 'ctl', 'aria-label': 'Forward 10 seconds', title: 'Forward 10 seconds (→)', onclick: () => skip(10)}, icon('fwd10')),
+      h('button', {class: 'ctl', 'aria-label': `Back ${step} seconds`, title: `Back ${step} seconds (←)`, onclick: () => skip(-step)}, skipIcon(-step)),
+      h('button', {class: 'ctl', 'aria-label': `Forward ${step} seconds`, title: `Forward ${step} seconds (→)`, onclick: () => skip(step)}, skipIcon(step)),
       h('div', {class: 'volume-group'}, muteButton, volume),
       timeButton, h('span', {class: 'grow'}), endsText,
       nextButton, episodesButton, captionsButton, settingsButton, pipButton, fullscreenButton));
@@ -1130,7 +1088,7 @@ async function renderPlayer(match, token) {
     h('div', {class: 'stats-head'}, h('span', {text: 'Playback Stats'}),
       h('button', {class: 'ctl', 'aria-label': 'Close stats', title: 'Close (S)', onclick: () => toggleStats()}, icon('close'))),
     statsBody);
-  const player = h('div', {class: `player cc-${storageGet('martube.captionSize', 'm')}`}, video,
+  const player = h('div', {class: `player cc-${appPrefs.subtitle_size} cc-style-${appPrefs.subtitle_style}`}, video,
     h('div', {class: 'player-top'},
       h('button', {class: 'btn btn-icon btn-glass glass', 'aria-label': 'Back', title: 'Back', onclick: back}, icon('left')),
       h('div', {class: 'player-heading'}, eyebrow, titleText, metaLine), infoButton),
@@ -1157,7 +1115,7 @@ async function renderPlayer(match, token) {
 
   /** A short message in the middle of the picture, e.g. "+10 s" or "Volume 80%". */
   const flash = (name, text) => {
-    fill(osd, name ? icon(name) : null, text ? h('span', {text}) : null);
+    fill(osd, name instanceof Node ? name : name ? icon(name) : null, text ? h('span', {text}) : null);
     osd.hidden = false;
     osd.classList.remove('fade');
     void osd.offsetWidth; // restart the pop-in animation
@@ -1166,7 +1124,7 @@ async function renderPlayer(match, token) {
   };
   const skip = seconds => {
     seek(video.currentTime + seconds);
-    flash(seconds < 0 ? 'back10' : 'fwd10', `${seconds > 0 ? '+' : '−'}${Math.abs(seconds)} s`);
+    flash(skipIcon(seconds), `${seconds > 0 ? '+' : '−'}${Math.abs(seconds)} s`);
   };
   const setVolume = value => {
     video.volume = Math.min(1, Math.max(0, value));
@@ -1222,11 +1180,11 @@ async function renderPlayer(match, token) {
   };
 
   // ---------- Subtitles: on/off, size and timing ----------
-  const setCaptions = (on, announce) => {
+  const setCaptions = (on, announce, remember) => {
     if (!subtitleTrack) return;
     subtitleTrack.track.mode = on ? 'showing' : 'hidden';
     captionsButton.classList.toggle('off', !on);
-    storageSet('martube.captions', on);
+    if (remember) savePrefs({subtitles_on: on}).catch(() => {});
     if (announce) flash('captions', on ? 'Subtitles on' : 'Subtitles off');
     drawMeta();
   };
@@ -1234,7 +1192,7 @@ async function renderPlayer(match, token) {
   const setCaptionSize = size => {
     CAPTION_SIZES.forEach(([key]) => player.classList.remove(`cc-${key}`));
     player.classList.add(`cc-${size}`);
-    storageSet('martube.captionSize', size);
+    savePrefs({subtitle_size: size}).catch(() => {});
   };
   const applySubtitleDelay = () => {
     const cues = subtitleTrack && subtitleTrack.track.cues;
@@ -1279,7 +1237,7 @@ async function renderPlayer(match, token) {
   ];
   const captionsMenu = () => [
     h('div', {class: 'pop-title', text: 'Subtitles'}),
-    segmented([[false, 'Off'], [true, 'Indonesian']], on => captionsOn() === on, on => setCaptions(on)),
+    segmented([[false, 'Off'], [true, 'Indonesian']], on => captionsOn() === on, on => setCaptions(on, false, true)),
     h('div', {class: 'pop-title', text: 'Text Size'}),
     segmented(CAPTION_SIZES, size => player.classList.contains(`cc-${size}`), setCaptionSize),
     h('div', {class: 'pop-title', text: 'Timing'}),
@@ -1395,7 +1353,7 @@ async function renderPlayer(match, token) {
   };
   const keysPanel = () => h('dl', {class: 'keys'},
     SHORTCUTS.map(([keys, label]) => [h('dt', {}, keys.split(' ').map(key => (['·', '–'].includes(key)
-      ? h('span', {class: 'or', text: key === '·' ? 'or' : 'to'}) : h('kbd', {text: key})))), h('dd', {text: label})]));
+      ? h('span', {class: 'or', text: key === '·' ? 'or' : 'to'}) : h('kbd', {text: key})))), h('dd', {text: label.replace('10 seconds', `${step} seconds`)})]));
 
   // ---------- Playback stats ----------
   let lastFrames = null;
@@ -1507,12 +1465,12 @@ async function renderPlayer(match, token) {
     if (event.target.matches('input, textarea, select') && event.target !== volume) return;
     const keys = {
       ' ': togglePlayFlash, k: togglePlayFlash,
-      ArrowLeft: () => skip(event.shiftKey ? -30 : -10), ArrowRight: () => skip(event.shiftKey ? 30 : 10),
-      j: () => skip(-10), l: () => skip(10), ',': () => frameStep(-1), '.': () => frameStep(1),
+      ArrowLeft: () => skip(event.shiftKey ? -30 : -step), ArrowRight: () => skip(event.shiftKey ? 30 : step),
+      j: () => skip(-step), l: () => skip(step), ',': () => frameStep(-1), '.': () => frameStep(1),
       Home: () => seek(0), End: () => seek(duration()),
       ArrowUp: () => setVolume(video.volume + 0.05), ArrowDown: () => setVolume(video.volume - 0.05),
       m: toggleMute, f: toggleFullscreen, p: togglePip, n: goNext, '<': () => stepSpeed(-1), '>': () => stepSpeed(1),
-      c: () => setCaptions(!captionsOn(), true), '[': () => shiftSubtitles(-0.25), ']': () => shiftSubtitles(0.25),
+      c: () => setCaptions(!captionsOn(), true, true), '[': () => shiftSubtitles(-0.25), ']': () => shiftSubtitles(0.25),
       i: () => openPanel('info'), e: () => { if (!episodesButton.hidden) openPanel('episodes'); },
       s: toggleStats, '?': () => openPanel('keys'),
       Escape: () => (!pop.hidden ? closePop() : panelName ? closePanel()
@@ -1651,26 +1609,32 @@ async function renderPlayer(match, token) {
 
   video.addEventListener('loadedmetadata', () => {
     // hls.js disables text tracks it does not manage; restore the viewer's choice once.
-    setCaptions(storageGet('martube.captions', true));
+    setCaptions(appPrefs.subtitles_on);
     drawMeta();
     if (info.resume && info.resume < video.duration - 10) {
-      video.currentTime = info.resume;
-      toast(`Resumed from ${clock(info.resume)}`, 'Start Over', () => { video.currentTime = 0; });
+      if (appPrefs.resume_playback) {
+        video.currentTime = info.resume;
+        toast(`Resumed from ${clock(info.resume)}`, 'Start Over', () => { video.currentTime = 0; });
+      } else {
+        toast(`You stopped at ${clock(info.resume)}`, 'Resume', () => { video.currentTime = info.resume; });
+      }
     }
   }, {once: true});
   video.addEventListener('error', () => showMessage('The video couldn’t be loaded.', true));
   video.addEventListener('ended', () => {
     saveProgress(false);
     if (!info.next) return;
-    let seconds = 8;
+    const autoplay = appPrefs.autoplay_next;
+    let seconds = appPrefs.autoplay_countdown;
     const count = h('strong', {text: seconds});
     const card = h('div', {class: 'next-up glass dark'},
       h('div', {class: 'eyebrow', text: 'Up Next'}), h('div', {class: 'headline', text: info.next.title}),
-      h('div', {class: 'footnote'}, 'Starts in ', count, ' seconds'),
+      h('div', {class: 'footnote'}, autoplay ? ['Starts in ', count, ' seconds'] : 'Autoplay is off in Settings'),
       h('div', {class: 'btn-row', style: 'margin-top:12px'},
         h('button', {class: 'btn btn-primary small', onclick: goNext}, icon('play'), 'Play Now'),
         h('button', {class: 'btn btn-glass glass small', onclick: () => { clearInterval(nextTimer); card.remove(); }}, 'Cancel')));
     player.append(card);
+    if (!autoplay) return;
     nextTimer = setInterval(() => {
       seconds -= 1;
       count.textContent = seconds;
@@ -1679,6 +1643,354 @@ async function renderPlayer(match, token) {
   });
   saveTimer = setInterval(() => { if (!video.paused) saveProgress(false); }, 5000);
   wake();
+}
+
+// ------------------------------------------------------------
+// Preferences: kept by the server (settings.json), read here by the player and the Settings page
+// ------------------------------------------------------------
+
+let appPrefs = {
+  autoplay_next: true, autoplay_countdown: 8, resume_playback: true, skip_seconds: 10,
+  subtitles_on: true, subtitle_size: 'm', subtitle_style: 'shade', glass_effect: storageGet('martube.glass', 'full'),
+};
+
+function applyAppearance() {
+  document.documentElement.dataset.glass = appPrefs.glass_effect;
+  storageSet('martube.glass', appPrefs.glass_effect); // read by liquidglass.js before the first paint
+  if (window.LiquidGlass) window.LiquidGlass.refresh();
+}
+
+/** The Settings payload (prefs, choices, folder, storage…), or null when the server is unreachable. */
+async function loadPrefs() {
+  try {
+    const data = await api('/api/settings');
+    appPrefs = {...appPrefs, ...data.prefs};
+    applyAppearance();
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function savePrefs(changes) {
+  const data = await api('/api/settings', changes);
+  appPrefs = {...appPrefs, ...data.prefs};
+  applyAppearance();
+  return data;
+}
+
+async function quitMarTube() {
+  const status = await api('/api/status').catch(() => ({downloads_active: 0}));
+  const active = status.downloads_active;
+  const ok = await dialog({title: 'Quit MarTube?',
+    message: (active ? `${plural(active, 'unfinished download')} will stop and restart next time.\n` : '')
+      + 'Open MarTube again from its shortcut.', confirm: 'Quit', destructive: true});
+  if (!ok) return;
+  await api('/api/quit', {});
+  cleanups.forEach(fn => { try { fn(); } catch { /* leaving anyway */ } });
+  cleanups = [];
+  view.replaceChildren(h('div', {class: 'page'}, emptyState('MarTube Has Quit', 'Open it again from the MarTube shortcut on your Desktop or Start menu.')));
+}
+
+/** Pick a new download folder: the Windows picker in the app window, a typed path in a browser. */
+async function chooseDownloadFolder(current) {
+  if (desktop()) return api('/api/folder/choose', {});
+  const typed = await dialog({title: 'Download Location', message: 'Enter the full path of the folder for new downloads.',
+    input: current, confirm: 'Save'});
+  return typed ? api('/api/folder/set', {folder: typed}) : null;
+}
+
+// ------------------------------------------------------------
+// Settings
+// ------------------------------------------------------------
+
+const SETTINGS_SECTIONS = [
+  ['account', 'Account', 'user'], ['playback', 'Playback', 'play'], ['downloads', 'Downloads', 'download'],
+  ['storage', 'Storage', 'disk'], ['following', 'Following', 'bell'], ['appearance', 'Appearance', 'sparkle'],
+  ['advanced', 'Advanced', 'gear'],
+];
+
+function settingRow(title, note, control) {
+  return h('div', {class: 'list-row setting-row'},
+    h('div', {class: 'row-text'}, h('div', {class: 'headline', text: title}), note ? h('div', {class: 'footnote', text: note}) : null),
+    control || h('span'));
+}
+
+function settingGroup(title, footer, ...rows) {
+  return h('section', {class: 'settings-group'},
+    title ? h('h3', {class: 'group-title', text: title}) : null,
+    h('div', {class: 'panel settings-card'}, rows),
+    footer ? h('p', {class: 'footnote group-footer', text: footer}) : null);
+}
+
+function settingSwitch(checked, label, onChange, disabled) {
+  const input = h('input', {type: 'checkbox', class: 'switch', checked, disabled, 'aria-label': label});
+  input.addEventListener('change', () => onChange(input.checked, input));
+  return input;
+}
+
+/** A select over [value, label] pairs that hands back the original value (number or text). */
+function settingSelect(options, value, label, onChange, disabled) {
+  const select = h('select', {class: 'select', 'aria-label': label, disabled},
+    options.map(([optionValue, text]) => h('option', {value: String(optionValue), text})));
+  select.value = String(value);
+  select.addEventListener('change', () => onChange(options.find(([optionValue]) => String(optionValue) === select.value)[0], select));
+  return select;
+}
+
+function settingSegments(options, value, label, onChange) {
+  return h('div', {class: 'seg setting-seg', role: 'radiogroup', 'aria-label': label},
+    options.map(([optionValue, text]) => h('button', {class: optionValue === value ? 'on' : '', role: 'radio',
+      'aria-checked': String(optionValue === value), onclick: () => onChange(optionValue)}, text)));
+}
+
+async function renderSettings(match, token) {
+  const section = new URLSearchParams(match[1] || '').get('section') || 'account';
+  view.replaceChildren(loading());
+  let [data, server] = await Promise.all([loadPrefs(), api('/api/server').catch(() => ({can_quit: false})), refreshAccount()]);
+  if (!current(token)) return;
+  if (!data) {
+    view.replaceChildren(h('div', {class: 'page'}, emptyState('Settings Unavailable', 'MarTube’s server could not be reached.')));
+    return;
+  }
+  const known = SETTINGS_SECTIONS.find(([id]) => id === section) || SETTINGS_SECTIONS[0];
+  const body = h('div', {class: 'settings-body'});
+  view.replaceChildren(h('div', {class: 'page settings-page'},
+    h('div', {class: 'page-head'}, h('h1', {class: 'large-title', text: 'Settings'})),
+    h('div', {class: 'settings-layout'},
+      h('nav', {class: 'settings-nav', 'aria-label': 'Settings sections'}, SETTINGS_SECTIONS.map(([id, label, iconName]) =>
+        h('a', {href: `#/settings?section=${id}`, class: id === known[0] ? 'active' : '', 'aria-current': id === known[0] ? 'page' : null},
+          h('span', {class: `settings-icon ${id}`}, icon(iconName)), label))),
+      body)));
+
+  /** Save one or more settings; redraw when other rows depend on the change. */
+  const save = async (changes, message, redraw) => {
+    try {
+      data = await savePrefs(changes);
+      if (message) toast(typeof message === 'function' ? message(data) : message);
+    } catch (error) {
+      toast(error.message);
+      redraw = true; // put the control back to the saved value
+    }
+    if (redraw && current(token)) draw();
+  };
+  const p = () => data.prefs;
+  const c = () => data.choices;
+
+  const sections = {
+    account() {
+      if (!account.available) {
+        return [settingGroup(null, null, settingRow('IDLIX Account', 'Signing in is not available in this version of MarTube.'))];
+      }
+      const signedIn = account.signed_in;
+      const name = accountName(account.user);
+      return [
+        h('div', {class: 'panel account-card'},
+          h('span', {class: 'account-initial big'}, signedIn ? name.slice(0, 1).toUpperCase() : icon('user')),
+          h('div', {class: 'row-text'},
+            h('div', {class: 'title-3', text: signedIn ? name : 'Not Signed In'}),
+            h('div', {class: 'footnote', text: signedIn
+              ? [account.user && account.user.username ? `@${account.user.username}` : null, 'IDLIX member'].filter(Boolean).join(' · ')
+              : 'Sign in with your IDLIX account to watch and download in Full HD.'})),
+          h('button', {class: `btn small ${signedIn ? 'btn-glass glass' : 'btn-primary'}`,
+            onclick: async () => { if (await accountSheet()) route(); }}, signedIn ? 'Manage' : 'Sign In')),
+        settingGroup('Video Quality', 'IDLIX decides the qualities each title has; MarTube always picks the best one your account allows.',
+          settingRow('Streaming and Downloads', signedIn ? 'Best available, up to Full HD' : 'Guests are limited to 720p',
+            h('span', {class: 'quality-chip', text: signedIn ? '1080p' : '720p'}))),
+        h('p', {class: 'footnote settings-note', text: 'Your password goes straight to IDLIX and is never saved. MarTube keeps only the sign-in session, encrypted for your Windows account.'}),
+      ];
+    },
+
+    playback() {
+      const seconds = values => values.map(value => [value, `${value} seconds`]);
+      const preview = h('div', {class: `cc-preview cc-${p().subtitle_size} cc-style-${p().subtitle_style}`},
+        h('span', {text: 'Ini contoh teks subtitle.'}));
+      return [
+        settingGroup('Playing', null,
+          settingRow('Autoplay Next Episode', 'When an episode ends, the next one starts after a countdown.',
+            settingSwitch(p().autoplay_next, 'Autoplay next episode', on => save({autoplay_next: on}, null, true))),
+          settingRow('Countdown', 'How long the Up Next card waits before playing.',
+            settingSelect(seconds(c().autoplay_countdown), p().autoplay_countdown, 'Countdown',
+              value => save({autoplay_countdown: value}), !p().autoplay_next)),
+          settingRow('Resume Where You Left Off', 'When off, videos start from the beginning and offer to resume.',
+            settingSwitch(p().resume_playback, 'Resume where you left off', on => save({resume_playback: on}))),
+          settingRow('Skip Back and Forward', 'The skip buttons and the ← → keys in the player.',
+            settingSelect(seconds(c().skip_seconds), p().skip_seconds, 'Skip interval', value => save({skip_seconds: value})))),
+        settingGroup('Subtitles', 'Subtitles are in Indonesian when IDLIX has them. Change them while watching with C or the CC button.',
+          settingRow('Show Subtitles', 'Turn subtitles on when a video starts.',
+            settingSwitch(p().subtitles_on, 'Show subtitles', on => save({subtitles_on: on}))),
+          settingRow('Text Size', null, settingSegments(c().subtitle_size.map(size => [size, size.toUpperCase()]),
+            p().subtitle_size, 'Subtitle size', size => save({subtitle_size: size}, null, true))),
+          settingRow('Style', null, settingSelect([['shadow', 'Outline only'], ['shade', 'Soft background'], ['box', 'Solid box']],
+            p().subtitle_style, 'Subtitle style', style => save({subtitle_style: style}, null, true))),
+          h('div', {class: 'cc-preview-frame', 'aria-hidden': 'true'}, preview)),
+      ];
+    },
+
+    downloads() {
+      const folder = h('div', {class: 'footnote path', text: data.folder});
+      const changeFolder = async () => {
+        try {
+          const result = await chooseDownloadFolder(data.folder);
+          if (!result) return;
+          data.folder = result.folder;
+          folder.textContent = result.folder;
+          toast('New downloads will be saved there');
+        } catch (error) { toast(error.message); }
+      };
+      const counts = Array.from({length: data.max_parallel}, (_, i) => [i + 1, i ? `${i + 1} at a time` : 'One at a time']);
+      return [
+        settingGroup('Location', 'Videos you already downloaded stay where they are and remain in your library.',
+          h('div', {class: 'list-row setting-row'},
+            h('div', {class: 'row-text'}, h('div', {class: 'headline', text: 'Download Folder'}), folder),
+            h('div', {class: 'row-actions'},
+              h('button', {class: 'btn btn-glass glass small', onclick: changeFolder}, 'Change…'),
+              h('button', {class: 'btn btn-glass glass small', onclick: () => api('/api/folder/open', {}).catch(error => toast(error.message))},
+                icon('folder'), 'Show')))),
+        settingGroup('Queue', null,
+          settingRow('Simultaneous Downloads', 'More at once can finish sooner, but each one gets less bandwidth.',
+            settingSelect(counts, data.parallel, 'Simultaneous downloads', count => save({parallel: count},
+              `Up to ${plural(count, 'download')} at a time`)))),
+        settingGroup('Subtitles', null,
+          settingRow('Download Subtitles', 'Save the subtitle next to each video.',
+            settingSwitch(p().download_subtitles, 'Download subtitles', on => save({download_subtitles: on}, null, true))),
+          settingRow('Also Save an .srt Copy', 'For players that do not read WebVTT, such as some TVs.',
+            settingSwitch(p().subtitle_srt_copy, 'Save an SRT copy', on => save({subtitle_srt_copy: on}), !p().download_subtitles))),
+        settingGroup('Smart Downloads', 'Shows you follow can also download new episodes on their own — choose that per show in Library › Following.',
+          settingRow('Download Next Episode', 'When you finish an episode, the next one downloads automatically.',
+            settingSwitch(p().auto_next_download, 'Download next episode', on => save({auto_next_download: on},
+              on ? 'The next episode will download when you finish one' : 'Smart downloads off')))),
+        settingGroup('Quality', null,
+          settingRow('Download Quality', account.signed_in ? 'Best available, up to Full HD (1080p)' : 'Up to 720p — sign in for Full HD',
+            h('a', {class: 'btn btn-glass glass small', href: '#/settings?section=account'}, 'Account'))),
+      ];
+    },
+
+    storage() {
+      const storage = data.storage;
+      const share = storage.used + storage.free ? (storage.used / (storage.used + storage.free)) * 100 : 0;
+      const days = c().delete_watched_after_days.map(value => [value, value ? `After ${plural(value, 'day')}` : 'Never']);
+      const removeWatched = async () => {
+        if (!await dialog({title: 'Delete Watched Downloads?', message: `${bytes(storage.watched)} of downloads you have finished will be removed.`,
+          confirm: 'Delete', destructive: true})) return;
+        try {
+          const result = await api('/api/storage/delete-watched', {});
+          toast(`${plural(result.deleted, 'download')} deleted · ${bytes(result.freed)} freed`);
+          data = await loadPrefs() || data;
+          draw();
+        } catch (error) { toast(error.message); }
+      };
+      return [
+        h('div', {class: 'panel settings-group'},
+          h('div', {class: 'page-head', style: 'margin:0 0 14px'}, h('h3', {class: 'title-3', text: 'This Computer'}),
+            h('div', {class: 'footnote path', text: data.folder})),
+          h('div', {class: 'meter'}, h('span', {style: `width:${share}%`})),
+          h('div', {class: 'meter-legend'},
+            h('span', {}, h('strong', {text: bytes(storage.used)}), ` used by ${plural(data.downloads, 'download')}`),
+            h('span', {}, h('strong', {text: bytes(storage.free)}), ' available'))),
+        settingGroup('Automatic Clean-Up', null,
+          settingRow('Remove Watched Downloads', 'Delete downloads some days after you finish watching them.',
+            settingSelect(days, p().delete_watched_after_days, 'Remove watched downloads', async (value, select) => {
+              if (value && !await dialog({title: 'Remove Watched Downloads?',
+                message: `Downloads you finish watching will be deleted from this computer ${plural(value, 'day')} later.`,
+                confirm: 'Turn On', destructive: true})) {
+                select.value = String(p().delete_watched_after_days);
+                return;
+              }
+              save({delete_watched_after_days: value}, value ? `Watched downloads are removed after ${plural(value, 'day')}` : 'Automatic removal off');
+            }))),
+        settingGroup('Files', null,
+          storage.watched ? settingRow('Watched Downloads', `${bytes(storage.watched)} can be freed now.`,
+            h('button', {class: 'btn btn-glass glass small btn-destructive', onclick: removeWatched}, icon('trash'), 'Delete Watched')) : null,
+          settingRow('Downloaded Videos', 'See, play and delete individual downloads.',
+            h('a', {class: 'btn btn-glass glass small', href: '#/library?tab=storage'}, 'Manage…'))),
+      ];
+    },
+
+    following() {
+      const hours = c().follow_check_hours.map(value => [value, value === 1 ? 'Every hour' : value === 24 ? 'Once a day' : `Every ${value} hours`]);
+      const check = h('button', {class: 'btn btn-glass glass small'}, icon('refresh'), 'Check Now');
+      check.addEventListener('click', async () => {
+        check.disabled = true;
+        check.replaceChildren(icon('refresh'), 'Checking…');
+        try {
+          const result = await api('/api/follows/check', {});
+          toast(result.found ? `${plural(result.found, 'new episode')} found` : 'No new episodes yet');
+          updateBadges();
+        } catch (error) { toast(error.message); }
+        check.disabled = false;
+        check.replaceChildren(icon('refresh'), 'Check Now');
+      });
+      return [
+        settingGroup('New Episodes', 'MarTube checks while it is running, starting shortly after it opens.',
+          settingRow('Check for New Episodes', 'How often to look for new episodes of the shows you follow.',
+            settingSelect(hours, p().follow_check_hours, 'Check interval', value => save({follow_check_hours: value}))),
+          settingRow('Check Now', data.following ? `${plural(data.following, 'show')} followed` : 'You are not following any shows yet', check)),
+        settingGroup(null, 'Follow a show with the bell on its page. Auto-download is set for each show.',
+          settingRow('Shows You Follow', null, h('a', {class: 'btn btn-glass glass small', href: '#/library?tab=following'}, 'Open'))),
+      ];
+    },
+
+    appearance() {
+      const options = [
+        ['full', 'Liquid Glass', 'Clear glass that bends the light at its edges.'],
+        ['blur', 'Frosted', 'Classic blurred glass; lighter on older computers.'],
+        ['solid', 'Solid', 'No transparency, for the best contrast.'],
+      ];
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      return [
+        settingGroup('Glass', 'Liquid Glass needs the MarTube window or a Chromium browser such as Chrome or Edge; elsewhere it looks frosted.',
+          h('div', {class: 'glass-options', role: 'radiogroup', 'aria-label': 'Glass style'}, options.map(([value, label, note]) =>
+            h('button', {class: `glass-option${p().glass_effect === value ? ' on' : ''}`, role: 'radio',
+              'aria-checked': String(p().glass_effect === value),
+              onclick: () => save({glass_effect: value}, `${label} on`, true)},
+            h('div', {class: `glass-sample ${value}`}, h('span', {text: 'Aa'})),
+            h('div', {class: 'headline', text: label}), h('div', {class: 'footnote', text: note}))))),
+        settingGroup('Motion', null,
+          settingRow('Reduce Motion', 'Follows Windows: Settings › Accessibility › Visual effects › Animation effects.',
+            h('span', {class: 'footnote', text: reduced ? 'On' : 'Off'}))),
+      ];
+    },
+
+    advanced() {
+      const rescan = h('button', {class: 'btn btn-glass glass small'}, icon('refresh'), 'Rescan');
+      rescan.addEventListener('click', async () => {
+        try {
+          await api('/api/library/rescan', {});
+          toast('Scanning the download folder… new videos appear in a moment');
+        } catch (error) { toast(error.message); }
+      });
+      return [
+        settingGroup('Library', null,
+          settingRow('Rescan Download Folder', 'Adds videos copied into the folder and forgets ones deleted outside MarTube.', rescan)),
+        settingGroup('Cache', null,
+          settingRow('Artwork Cache', `${bytes(data.cache_bytes)} of posters and images. They download again when needed.`,
+            h('button', {class: 'btn btn-glass glass small', disabled: !data.cache_bytes, onclick: async () => {
+              try {
+                const result = await api('/api/cache/clear', {});
+                toast(`${bytes(result.freed)} cleared`);
+                data.cache_bytes = 0;
+                draw();
+              } catch (error) { toast(error.message); }
+            }}, 'Clear'))),
+        settingGroup('Troubleshooting', null,
+          settingRow('Log Files', 'Helpful when a download or stream fails.',
+            h('button', {class: 'btn btn-glass glass small', onclick: () => api('/api/logs/open', {}).catch(error => toast(error.message))},
+              icon('folder'), 'Open'))),
+        settingGroup('MarTube', null,
+          settingRow('Library and Settings', data.data_folder),
+          settingRow('Server', `Running at ${location.host}${server.can_quit ? ' · downloads continue when you close this tab' : ''}`,
+            server.can_quit ? h('button', {class: 'btn btn-glass glass small btn-destructive', onclick: quitMarTube}, icon('power'), 'Quit') : null)),
+      ];
+    },
+  };
+
+  function draw() {
+    const scroll = window.scrollY;
+    fill(body, h('h2', {class: 'title-2 settings-heading', text: known[1]}), sections[known[0]]());
+    window.scrollTo(0, scroll);
+  }
+  draw();
 }
 
 // ------------------------------------------------------------
@@ -1694,12 +2006,12 @@ function accountName(user) {
 
 async function refreshAccount() {
   account = await api('/api/account').catch(() => account);
-  accountButton.hidden = !account.available;
   const initial = accountButton.querySelector('.account-initial');
   accountButton.classList.toggle('signed-in', account.signed_in);
   initial.hidden = !account.signed_in;
   initial.textContent = account.signed_in ? accountName(account.user).slice(0, 1).toUpperCase() : '';
-  accountButton.title = account.signed_in ? `Signed in as ${accountName(account.user)}` : 'Sign in to IDLIX for Full HD';
+  accountButton.title = account.signed_in ? `${accountName(account.user)} · Settings` : 'Account and Settings';
+  accountButton.classList.toggle('on', location.hash.startsWith('#/settings'));
   return account;
 }
 
@@ -1773,7 +2085,18 @@ function accountSheet() {
   });
 }
 
-accountButton.addEventListener('click', () => accountSheet());
+accountButton.addEventListener('click', async () => {
+  if (closeOpenMenu) return closeOpenMenu();
+  const server = await api('/api/server').catch(() => ({can_quit: false}));
+  openMenu(accountButton, [
+    account.available ? {label: account.signed_in ? accountName(account.user) : 'Sign In to IDLIX', icon: 'user',
+      action: async () => { if (await accountSheet() && location.hash.startsWith('#/settings')) route(); }} : null,
+    {label: 'Settings', icon: 'gear', action: () => { location.hash = '#/settings'; }},
+    {label: 'Open Downloads Folder', icon: 'folder', action: () => api('/api/folder/open', {}).catch(error => toast(error.message))},
+    server.can_quit ? '-' : null,
+    server.can_quit ? {label: 'Quit MarTube', icon: 'power', destructive: true, action: quitMarTube} : null,
+  ].filter(Boolean));
+});
 
 // ------------------------------------------------------------
 // Navigation badges
@@ -1793,4 +2116,4 @@ async function updateBadges() {
 setInterval(updateBadges, 3000);
 updateBadges();
 refreshAccount();
-route();
+loadPrefs().finally(route);

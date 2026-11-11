@@ -106,7 +106,11 @@ class AppServer:
         self.route('POST', r'/api/downloads/(\d+)/cancel', lambda r, m: b.cancel(int(m[1])))
         self.route('POST', r'/api/downloads/(\d+)/retry', lambda r, m: b.retry_job(int(m[1])))
         self.route('POST', r'/api/downloads/clear', lambda r, m: b.clear_finished())
-        self.route('POST', r'/api/settings', lambda r, m: b.set_parallel(r.json()['parallel']))
+        self.route('GET', r'/api/settings', lambda r, m: b.settings_view())
+        self.route('POST', r'/api/settings', lambda r, m: b.update_settings(**r.json()))
+        self.route('POST', r'/api/library/rescan', lambda r, m: b.rescan_library())
+        self.route('POST', r'/api/cache/clear', lambda r, m: b.clear_cache())
+        self.route('POST', r'/api/logs/open', lambda r, m: b.open_logs())
         self.route('POST', r'/api/folder/choose', lambda r, m: b.choose_folder())
         self.route('POST', r'/api/folder/set', lambda r, m: b.set_folder(r.json().get('folder')))
         self.route('POST', r'/api/folder/open', lambda r, m: b.open_folder())
@@ -118,8 +122,7 @@ class AppServer:
         self.route('POST', r'/api/follow/([\w-]+)/auto', lambda r, m: b.set_follow_auto(m[1], r.json()['auto']))
         self.route('POST', r'/api/follows/check', lambda r, m: b.check_follows())
         self.route('POST', r'/api/new-episodes/seen', lambda r, m: b.mark_new_seen(r.json().get('series_id')))
-        self.route('POST', r'/api/prefs', lambda r, m: b.set_prefs(**{
-            k: r.json().get(k) for k in ('auto_next_download', 'delete_watched_after_days')}))
+        self.route('POST', r'/api/prefs', lambda r, m: b.set_prefs(**r.json()))
         self.route('POST', r'/api/media/(\d+)/delete', lambda r, m: b.delete_media(int(m[1])))
         self.route('POST', r'/api/storage/delete-watched', lambda r, m: b.delete_watched())
         self.route('POST', r'/api/progress', lambda r, m: b.save_progress(**{

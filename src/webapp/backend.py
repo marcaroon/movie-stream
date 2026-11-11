@@ -25,9 +25,35 @@ BROWSE_CACHE_SECONDS = 600
 RESUME_AFTER_SECONDS = 30
 STREAM_ATTEMPTS = 2  # a fresh playback session once more after a network timeout
 FOLLOW_CHECK_DELAY = 20  # seconds after start, so the first screen loads first
-FOLLOW_CHECK_INTERVAL = 3 * 3600
 DELETE_AFTER_CHOICES = (0, 1, 3, 7, 14, 30)  # days; 0 = never delete watched videos
-DEFAULT_PREFS = {'auto_next_download': False, 'delete_watched_after_days': 0}
+# Every setting the Settings page can change: True/False switches, or the allowed values.
+PREF_CHOICES = {
+    # Downloads and storage
+    'auto_next_download': bool,
+    'delete_watched_after_days': DELETE_AFTER_CHOICES,
+    'download_subtitles': bool,
+    'subtitle_srt_copy': bool,
+    # Following
+    'follow_check_hours': (1, 3, 6, 12, 24),
+    # Player
+    'autoplay_next': bool,
+    'autoplay_countdown': (5, 8, 10, 15, 20),
+    'resume_playback': bool,
+    'skip_seconds': (5, 10, 15, 30),
+    'subtitles_on': bool,
+    'subtitle_size': ('s', 'm', 'l', 'xl'),
+    'subtitle_style': ('shadow', 'shade', 'box'),
+    # Appearance
+    'glass_effect': ('full', 'blur', 'solid'),
+}
+DEFAULT_PREFS = {
+    'auto_next_download': False, 'delete_watched_after_days': 0,
+    'download_subtitles': True, 'subtitle_srt_copy': True,
+    'follow_check_hours': 3,
+    'autoplay_next': True, 'autoplay_countdown': 8, 'resume_playback': True, 'skip_seconds': 10,
+    'subtitles_on': True, 'subtitle_size': 'm', 'subtitle_style': 'shade',
+    'glass_effect': 'full',
+}
 DELETABLE_SUFFIXES = {'.mp4', '.vtt', '.srt'}
 
 
@@ -64,9 +90,11 @@ class Backend:
         self.downloads = DownloadManager(on_change=lambda job: self.queue_changed.set(), limit=parallel,
                                          download_dir=self.download_dir, library=library, images=images,
                                          account=account)
+        self.apply_download_prefs()
         self.restore_queue()
         threading.Thread(target=self.save_queue_loop, daemon=True).start()
         self.stop_checks = threading.Event()
+        self.reschedule_checks = threading.Event()  # the check interval changed
 
     def start_background_tasks(self):
         """Follow checks and clean-up of watched videos, now and then every few hours."""
@@ -79,13 +107,31 @@ class Backend:
                     self.delete_expired_watched()
                 except Exception as error:
                     logger.warning(f'Background check failed: {error}')
-                if self.stop_checks.wait(FOLLOW_CHECK_INTERVAL):
-                    return
+                # Wait the chosen interval; a new interval restarts the wait from now.
+                while True:
+                    self.reschedule_checks.clear()
+                    rescheduled = self.reschedule_checks.wait(self.pref('follow_check_hours') * 3600)
+                    if self.stop_checks.is_set():
+                        return
+                    if not rescheduled:
+                        break
 
         threading.Thread(target=loop, daemon=True).start()
 
     def pref(self, name):
-        return self.prefs.get(name, DEFAULT_PREFS[name])
+        value = self.prefs.get(name, DEFAULT_PREFS[name])
+        allowed = PREF_CHOICES[name]
+        # A hand-edited or outdated settings file never breaks the app: fall back to the default.
+        if (allowed is bool and not isinstance(value, bool)) or (allowed is not bool and value not in allowed):
+            return DEFAULT_PREFS[name]
+        return value
+
+    def all_prefs(self):
+        return {name: self.pref(name) for name in DEFAULT_PREFS}
+
+    def apply_download_prefs(self):
+        self.downloads.subtitles = self.pref('download_subtitles')
+        self.downloads.srt_copy = self.pref('subtitle_srt_copy')
 
     def adopt_library_folder(self, library):
         """With no folder chosen yet, keep saving where the library's videos already are.
@@ -276,18 +322,88 @@ class Backend:
     def library_view(self):
         return {'watch_later': self.library.watch_later(), 'follows': self.library.follows(),
                 'new_episodes': self.library.new_episodes(), 'storage': self.storage_view(),
-                'prefs': {name: self.pref(name) for name in DEFAULT_PREFS},
-                'delete_choices': DELETE_AFTER_CHOICES}
+                'prefs': self.all_prefs(), 'delete_choices': DELETE_AFTER_CHOICES}
 
-    def set_prefs(self, auto_next_download=None, delete_watched_after_days=None):
-        if auto_next_download is not None:
-            self.prefs['auto_next_download'] = bool(auto_next_download)
-        if delete_watched_after_days is not None:
-            if int(delete_watched_after_days) not in DELETE_AFTER_CHOICES:
-                raise ValueError('Unsupported clean-up period')
-            self.prefs['delete_watched_after_days'] = int(delete_watched_after_days)
-        settings.save(settings.SETTINGS_FILE, self.prefs)
-        return {name: self.pref(name) for name in DEFAULT_PREFS}
+    def set_prefs(self, **changes):
+        self.update_settings(**{name: value for name, value in changes.items() if value is not None})
+        return self.all_prefs()
+
+    # ------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------
+    def settings_view(self):
+        storage = self.storage_view()
+        return {'prefs': self.all_prefs(),
+                'choices': {name: list(allowed) for name, allowed in PREF_CHOICES.items() if allowed is not bool},
+                'parallel': self.downloads.limit, 'max_parallel': MAX_PARALLEL_DOWNLOADS,
+                'folder': str(self.download_dir),
+                'storage': {key: storage[key] for key in ('used', 'free', 'watched', 'disk_total')},
+                'downloads': len(storage['items']), 'following': len(self.library.follows()),
+                'cache_bytes': self.cache_size(), 'data_folder': str(settings.CONFIG_DIR),
+                'log_folder': str(settings.DATA_DIR / 'logs')}
+
+    def update_settings(self, **changes):
+        """Change any of PREF_CHOICES (and 'parallel'); every value is checked first."""
+        updates = {}
+        for name, value in changes.items():
+            if name == 'parallel':
+                continue
+            allowed = PREF_CHOICES.get(name)
+            if allowed is None:
+                raise UserError(f'Unknown setting: {name}')
+            if allowed is bool:
+                if not isinstance(value, bool):
+                    raise UserError(f'{name} must be on or off')
+            elif value not in allowed or isinstance(value, bool):
+                raise UserError(f'Unsupported value for {name}: {value}')
+            updates[name] = value
+        if 'parallel' in changes:
+            self.set_parallel(changes['parallel'])
+        if updates:
+            self.prefs.update(updates)
+            settings.save(settings.SETTINGS_FILE, self.prefs)
+            self.apply_download_prefs()
+            if 'follow_check_hours' in updates:
+                self.reschedule_checks.set()
+            if updates.get('delete_watched_after_days'):
+                threading.Thread(target=self.delete_expired_watched, daemon=True).start()
+        return self.settings_view()
+
+    def cache_size(self):
+        try:
+            return sum(f.stat().st_size for f in Path(self.images.folder).iterdir() if f.is_file())
+        except OSError:
+            return 0
+
+    def clear_cache(self):
+        """Delete cached artwork; it downloads again when shown."""
+        freed = 0
+        for item in list(Path(self.images.folder).glob('*')):
+            if item.is_file():
+                try:
+                    size = item.stat().st_size
+                    item.unlink()
+                    freed += size
+                except OSError:
+                    pass  # being written or served right now
+        logger.info(f'Cleared {freed / 2**20:.0f} MB of cached artwork')
+        return {'freed': freed}
+
+    def rescan_library(self):
+        self.scan_library()
+        return {'ok': True}
+
+    def open_logs(self):
+        return self.open_path(settings.DATA_DIR / 'logs')
+
+    @staticmethod
+    def open_path(folder):
+        folder.mkdir(parents=True, exist_ok=True)
+        if os.name == 'nt':
+            os.startfile(folder)
+        else:
+            webbrowser.open(folder.as_uri())
+        return {'ok': True}
 
     # ------------------------------------------------------------
     # Storage
@@ -407,12 +523,7 @@ class Backend:
         return {'folder': str(self.download_dir)}
 
     def open_folder(self):
-        self.download_dir.mkdir(parents=True, exist_ok=True)
-        if os.name == 'nt':
-            os.startfile(self.download_dir)
-        else:
-            webbrowser.open(self.download_dir.as_uri())
-        return {'ok': True}
+        return self.open_path(self.download_dir)
 
     def save_prefs(self):
         self.prefs.update(parallel=self.downloads.limit,
@@ -613,6 +724,7 @@ class Backend:
         """Remember unfinished downloads, stop them and close network sessions."""
         self.closing = True
         self.stop_checks.set()
+        self.reschedule_checks.set()
         self.queue_changed.set()
         settings.save(QUEUE_FILE, [list(job) for job in self.downloads.unfinished_jobs()])
         self.downloads.cancel_all()

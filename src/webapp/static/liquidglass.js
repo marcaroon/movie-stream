@@ -25,6 +25,8 @@
   const root = document.documentElement;
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const reduceTransparency = matchMedia('(prefers-reduced-transparency: reduce)');
+  // Settings › Appearance (full | blur | solid), remembered so the first paint already matches.
+  try { root.dataset.glass = JSON.parse(localStorage.getItem('martube.glass')) || 'full'; } catch { root.dataset.glass = 'full'; }
 
   // ------------------------------------------------------------
   // Spring easing for presses (stiffness 300, damping ratio 0.5, like LiquidGlass-Cpp's press spring)
@@ -227,11 +229,12 @@
 
   function apply(node) {
     if (!node.isConnected) return;
-    const off = reduceTransparency.matches || node.dataset.lg === 'off';
+    const off = reduceTransparency.matches || node.dataset.lg === 'off' || (root.dataset.glass || 'full') !== 'full';
     const w = bucket(node.offsetWidth), h = bucket(node.offsetHeight);
     if (off || node.offsetWidth < 16 || node.offsetHeight < 16) {
       node.classList.remove('lg-on');
       node.style.removeProperty('backdrop-filter');
+      delete node.dataset.lgFilter;
       return;
     }
     const style = getComputedStyle(node);
