@@ -70,6 +70,7 @@ const ICONS = {
   pip: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11.5" width="6.5" height="5" rx="1.2" fill="currentColor" stroke="none"/>',
   episodes: '<rect x="3.5" y="5" width="6.5" height="5" rx="1.2"/><rect x="3.5" y="14" width="6.5" height="5" rx="1.2"/><path d="M13.5 6.5h7M13.5 9h4.5M13.5 15.5h7M13.5 18h4.5"/>',
   stats: '<path d="M5 19.5v-7M10 19.5v-15M15 19.5v-9M20 19.5v-12"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14.5h8"/>',
 };
 
@@ -1707,7 +1708,7 @@ async function chooseDownloadFolder(current) {
 const SETTINGS_SECTIONS = [
   ['account', 'Account', 'user'], ['playback', 'Playback', 'play'], ['downloads', 'Downloads', 'download'],
   ['storage', 'Storage', 'disk'], ['following', 'Following', 'bell'], ['appearance', 'Appearance', 'sparkle'],
-  ['advanced', 'Advanced', 'gear'],
+  ['phone', 'Phone', 'phone'], ['advanced', 'Advanced', 'gear'],
 ];
 
 function settingRow(title, note, control) {
@@ -1950,6 +1951,55 @@ async function renderSettings(match, token) {
           settingRow('Reduce Motion', 'Follows Windows: Settings › Accessibility › Visual effects › Animation effects.',
             h('span', {class: 'footnote', text: reduced ? 'On' : 'Off'}))),
       ];
+    },
+
+    phone() {
+      const box = h('div', {class: 'phone-settings'}, loading());
+      const show = phone => {
+        if (!current(token) || known[0] !== 'phone') return;
+        const rows = [];
+        if (phone.on_phone) {
+          rows.push(settingGroup(null, null, settingRow('Connected From This Device',
+            `Streaming through MarTube on your computer (${location.host}). Phone access is turned on and off on the computer.`)));
+          fill(box, rows);
+          return;
+        }
+        const toggle = settingSwitch(phone.enabled, 'Phone access', async (on, input) => {
+          input.disabled = true;
+          try {
+            show(await api('/api/phone', {enabled: on}));
+            toast(on ? 'Phone access on' : 'Phone access off');
+          } catch (error) {
+            toast(error.message);
+            input.checked = !on;
+            input.disabled = false;
+          }
+        });
+        rows.push(settingGroup(null,
+          'Only devices on the same Wi-Fi can connect, and only after scanning the code below. Use it on your home Wi-Fi, not on public networks: the connection is not encrypted.',
+          settingRow('Watch on Your Phone', 'Open MarTube in your phone’s browser while it is on the same Wi-Fi as this computer.', toggle)));
+        if (phone.enabled && phone.qr) {
+          rows.push(h('div', {class: 'panel phone-pair'},
+            h('img', {class: 'phone-qr', src: phone.qr, alt: 'QR code that signs a phone in to MarTube', width: 200, height: 200}),
+            h('div', {class: 'row-text'},
+              h('div', {class: 'title-3', text: 'Scan With Your Phone'}),
+              h('ol', {class: 'footnote phone-steps'},
+                h('li', {text: 'Connect the phone to the same Wi-Fi as this computer.'}),
+                h('li', {text: 'Open the camera and scan this code, then open the link.'}),
+                h('li', {text: 'Optional: in the browser menu, choose Add to Home Screen.'})),
+              h('div', {class: 'footnote'}, 'Address: ', h('strong', {class: 'path', text: phone.url})),
+              phone.remembered ? null : h('div', {class: 'footnote',
+                text: 'MarTube is running in its own window, so the code changes each time it starts. Start it from the browser shortcut to scan only once.'}))));
+          rows.push(settingGroup('Can’t Connect?', null,
+            settingRow('Windows Firewall', 'If Windows asked whether Python may use the network, it must be allowed on Private networks. The Wi-Fi should be set to Private in Windows network settings.'),
+            phone.addresses.length > 1 ? settingRow('Other Addresses', phone.addresses.slice(1).map(a => `${a}:${phone.port}`).join(' · ')) : null));
+        } else if (phone.enabled) {
+          rows.push(settingGroup(null, null, settingRow('No Network', 'This computer is not connected to a Wi-Fi or local network.')));
+        }
+        fill(box, rows);
+      };
+      api('/api/phone').then(show).catch(error => fill(box, emptyState('Phone Access Unavailable', error.message)));
+      return [box];
     },
 
     advanced() {

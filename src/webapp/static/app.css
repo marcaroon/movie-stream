@@ -585,6 +585,12 @@ kbd { display: inline-grid; place-items: center; min-width: 24px; height: 22px; 
 .settings-icon.following { background: linear-gradient(#ffb340, #f28a00); }
 .settings-icon.appearance { background: linear-gradient(#cf7cf6, #a347e0); }
 .settings-icon.advanced { background: linear-gradient(#8e8e93, #5d5d62); }
+.settings-icon.phone { background: linear-gradient(#5ac8fa, #2a9bd8); }
+.phone-pair { display: flex; align-items: center; gap: 24px; margin: 0 0 28px; }
+.phone-qr { flex: none; width: 200px; height: 200px; border-radius: 14px; background: #fff; image-rendering: pixelated; }
+.phone-pair .row-text { display: grid; gap: 10px; min-width: 0; }
+.phone-steps { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+@media (max-width: 640px) { .phone-pair { flex-direction: column; align-items: flex-start; } }
 .settings-body { min-width: 0; max-width: 780px; }
 .settings-heading { margin: 4px 0 20px; }
 .settings-group { margin-bottom: 28px; }
@@ -651,7 +657,7 @@ kbd { display: inline-grid; place-items: center; min-width: 24px; height: 22px; 
   .hero-side { display: none; }
 }
 @media (max-width: 640px) {
-  .brand span { display: none; }
+  .brand > span:not(.brand-mark) { display: none; }
   .brand { padding: 0 9px; }
   .hero { padding-bottom: 54px; }
   .file-row { grid-template-columns: minmax(0, 1fr) auto; }
@@ -660,5 +666,15 @@ kbd { display: inline-grid; place-items: center; min-width: 24px; height: 22px; 
   .player-top { padding: 16px 16px 70px; }
   .controls { padding: 12px 10px 8px; }
   .player-stats { top: 90px; left: 16px; }
+}
+/* Phones: drop the brand capsule so the three tabs, search and account fit on one row. */
+@media (max-width: 480px) {
+  :root { --gutter: 14px; }
+  .topbar { gap: 8px; grid-template-columns: minmax(0, 1fr) auto; }
+  .brand { display: none; }
+  .tabs { justify-self: start; min-width: 0; padding: 3px; gap: 0; }
+  .tabs a { height: 38px; padding: 0 10px; font-size: 13.5px; }
+  .topbar-end { gap: 8px; }
+  .nav-search, .nav-account { width: 44px; height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

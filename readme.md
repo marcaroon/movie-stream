@@ -45,6 +45,16 @@ Unduhan tetap berjalan walaupun tab browser ditutup. Untuk mematikan aplikasi se
 
 Hasil unduhan tersimpan di folder `Downloads` di dalam folder proyek. Lokasinya bisa diganti dari halaman Downloads.
 
+## Nonton dari HP
+
+MarTube bisa dibuka dari HP yang tersambung ke Wi-Fi yang sama dengan komputer. Videonya tetap disiapkan oleh MarTube di komputer, jadi komputer harus menyala dan MarTube harus berjalan.
+
+1. Di komputer, buka Settings › Phone lalu nyalakan "Watch on Your Phone".
+2. Kalau Windows bertanya apakah Python boleh memakai jaringan, izinkan untuk jaringan Private.
+3. Scan QR code yang muncul dengan kamera HP, lalu buka link-nya. Cukup sekali; HP akan tetap masuk.
+
+Koneksinya tidak terenkripsi, jadi nyalakan fitur ini hanya di Wi-Fi rumah, bukan Wi-Fi publik. Kalau HP tidak bisa tersambung, pastikan jaringan Wi-Fi di Windows diatur sebagai Private.
+
 ## Kualitas 1080p
 
 Tanpa akun, IDLIX hanya memberi kualitas sampai 720p. Supaya dapat 1080p, klik ikon akun di kanan atas lalu masuk dengan akun IDLIX kamu. Akun gratis pun sudah cukup.

@@ -6,13 +6,20 @@ Only this computer's own app page may use it. It listens on 127.0.0.1,
 rejects other Host names (DNS rebinding), and requires a session cookie that
 is handed out once through the URL the launcher or window opens. The cookie is
 SameSite=Strict, so other websites in a browser cannot make requests with it.
+
+Phone access (off by default, Settings › Phone) adds a second listener on the
+home network. It still needs the session cookie (a phone gets it by scanning the
+QR code in Settings), only answers devices with private addresses, and only for
+Host names that are this computer's private IP addresses.
 """
 
 import hmac
+import ipaddress
 import json
 import mimetypes
 import re
 import secrets
+import socket
 import sys
 import threading
 from http.cookies import SimpleCookie
@@ -23,9 +30,11 @@ from urllib.parse import parse_qs, urlsplit
 from loguru import logger
 
 from src import settings
-from src.webapp.backend import UserError
+from src.webapp.backend import HLS_PATH, UserError
 
 STATIC_DIR = Path(__file__).resolve().parent / 'static'
+PHONE_PREF = 'phone_access'
+TAILSCALE = ipaddress.ip_network('100.64.0.0/10')  # carrier-grade NAT range, used by Tailscale
 COOKIE = 'idlix_session'
 CHUNK = 256 * 1024
 LOGIN_SECONDS = 365 * 86400
@@ -35,6 +44,9 @@ LOCKED_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><title>Mar
 <div style="max-width:420px;text-align:center;padding:24px"><h1 style="font-size:34px;letter-spacing:-.03em;
 margin:0 0 8px">MarTube</h1><p style="color:rgba(235,235,245,.6);margin:0">Open MarTube from its shortcut on the
 Desktop or Start menu to sign this browser in.</p></div></body></html>'''.encode()
+PHONE_LOCKED_PAGE = LOCKED_PAGE.replace(
+    b'Open MarTube from its shortcut on the\nDesktop or Start menu to sign this browser in.',
+    b'On your computer, open MarTube Settings &rsaquo; Phone and scan the QR code with this phone.')
 
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -55,6 +67,39 @@ class QuietServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def home_address(text):
+    """True for an IPv4 address on a home network (or Tailscale), never the internet."""
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return (address.version == 4 and not address.is_loopback and not address.is_link_local
+            and (address.is_private or address in TAILSCALE))
+
+
+def is_loopback(text):
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def network_addresses():
+    """This computer's home-network IPv4 addresses, the one with the default route first."""
+    found = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(('10.255.255.255', 1))  # no packet is sent; this only picks the interface
+            found.append(probe.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        found += socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError:
+        pass
+    return [a for i, a in enumerate(found) if home_address(a) and a not in found[:i]]
+
+
 class AppServer:
     def __init__(self, backend, static_dir=STATIC_DIR, port=0, token=None, remember_login=False):
         """port 0 picks a free port. A fixed token and remember_login keep a browser logged in
@@ -71,6 +116,7 @@ class AppServer:
         class Handler(RequestHandler):
             app = server
 
+        self.handler = Handler
         self.httpd = QuietServer(('127.0.0.1', port), Handler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_port
@@ -78,6 +124,8 @@ class AppServer:
         self.hosts = {self.host, f'localhost:{self.port}'}
         self.origin = 'http://' + self.host
         backend.origins = {'http://' + host for host in self.hosts}
+        self.lan = None  # the home-network listener while phone access is on
+        self.lan_lock = threading.Lock()
 
     @property
     def url(self):
@@ -86,11 +134,77 @@ class AppServer:
 
     def start(self):
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        if self.backend.prefs.get(PHONE_PREF) is True:
+            try:
+                self.open_lan()
+            except OSError as error:
+                logger.warning(f'Phone access could not start: {error}')
         return self
 
     def stop(self):
+        self.close_lan()
         self.httpd.shutdown()
         self.httpd.server_close()
+
+    # ------------------------------------------------------------
+    # Phone access
+    # ------------------------------------------------------------
+    def open_lan(self):
+        with self.lan_lock:
+            if self.lan:
+                return
+            # Windows asks once whether Python may accept connections (allow Private networks).
+            lan = QuietServer(('0.0.0.0', self.port), self.handler)
+            lan.daemon_threads = True
+            threading.Thread(target=lan.serve_forever, daemon=True).start()
+            self.lan = lan
+        logger.info(f'Phone access on: {", ".join(network_addresses()) or "no network"} port {self.port}')
+
+    def close_lan(self):
+        with self.lan_lock:
+            lan, self.lan = self.lan, None
+        if lan:
+            lan.shutdown()
+            lan.server_close()
+            logger.info('Phone access off')
+
+    def allowed_host(self, host):
+        """The Host header names this server: loopback always, home-network IPs while phone access is on."""
+        if host in self.hosts:
+            return True
+        if not self.lan or not host:
+            return False
+        name, _, port = host.rpartition(':')
+        return port == str(self.port) and home_address(name)
+
+    def phone_view(self, request):
+        addresses = network_addresses()
+        enabled = self.lan is not None
+        view = {'enabled': enabled, 'addresses': addresses, 'port': self.port,
+                'remembered': self.remember_login, 'on_phone': not request.from_this_computer(),
+                'url': None, 'qr': None}
+        if enabled and addresses:
+            import segno  # only needed here
+            view['url'] = f'http://{addresses[0]}:{self.port}/'
+            login = f"{view['url']}?token={self.token}"
+            view['qr'] = segno.make(login, error='m').svg_data_uri(scale=6, border=2, dark='#000', light='#fff')
+        return view
+
+    def set_phone_access(self, request, enabled):
+        if not request.from_this_computer():
+            raise HttpError(403, 'Turn phone access on or off on the computer running MarTube')
+        if not isinstance(enabled, bool):
+            raise UserError('enabled must be true or false')
+        if enabled:
+            try:
+                self.open_lan()
+            except OSError as error:
+                raise UserError(f'Could not open port {self.port} on the network: {error}')
+        else:
+            self.close_lan()
+        self.backend.prefs[PHONE_PREF] = enabled
+        settings.save(settings.SETTINGS_FILE, self.backend.prefs)
+        return self.phone_view(request)
 
     def route(self, method, pattern, handler):
         self.routes.append((method, re.compile(pattern + '$'), handler))
@@ -127,15 +241,18 @@ class AppServer:
         self.route('POST', r'/api/storage/delete-watched', lambda r, m: b.delete_watched())
         self.route('POST', r'/api/progress', lambda r, m: b.save_progress(**{
             k: r.json().get(k) for k in ('url', 'position', 'duration')}))
-        self.route('GET', r'/api/server', lambda r, m: {'can_quit': self.on_quit is not None})
+        # A phone cannot start MarTube again, so it is never offered Quit.
+        self.route('GET', r'/api/server', lambda r, m: {'can_quit': self.on_quit is not None and r.from_this_computer()})
+        self.route('GET', r'/api/phone', lambda r, m: self.phone_view(r))
+        self.route('POST', r'/api/phone', lambda r, m: self.set_phone_access(r, r.json().get('enabled')))
         self.route('GET', r'/api/account', lambda r, m: b.account_view())
         self.route('POST', r'/api/account/sign-in', lambda r, m: b.sign_in(**{
             k: r.json().get(k) for k in ('identifier', 'password', 'replace_sessions')}))
         self.route('POST', r'/api/account/sign-out', lambda r, m: b.sign_out())
-        self.route('POST', r'/api/quit', lambda r, m: self.quit())
+        self.route('POST', r'/api/quit', lambda r, m: self.quit(r))
 
-    def quit(self):
-        if not self.on_quit:
+    def quit(self, request=None):
+        if not self.on_quit or (request and not request.from_this_computer()):
             raise HttpError(404, 'Not available')
         # Answer first; the shutdown (waiting for downloads to stop) runs afterwards.
         threading.Timer(0.3, self.on_quit).start()
@@ -160,6 +277,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         value = cookie[COOKIE].value if COOKIE in cookie else ''
         return hmac.compare_digest(value, self.app.token)
 
+    def from_this_computer(self):
+        return is_loopback(self.client_address[0])
+
     # ------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------
@@ -175,7 +295,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         # request's body first, or leftover bytes would corrupt the next request line.
         self.body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
         try:
-            if self.headers.get('Host') not in self.app.hosts:
+            if not self.from_this_computer() and not (self.app.lan and home_address(self.client_address[0])):
+                raise HttpError(403, 'Not on this network')
+            if not self.app.allowed_host(self.headers.get('Host')):
                 raise HttpError(403, 'Unexpected host')
             if method == 'GET' and path == '/api/ping':  # lets the launcher find a running server
                 return self.send_json({'app': settings.APP_NAME})
@@ -183,8 +305,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return self.send_login()
             if not self.authorised():
                 if method == 'GET' and path in ('/', '/index.html'):
-                    return self.send_body(LOCKED_PAGE, 'text/html; charset=utf-8', 403)
+                    page = LOCKED_PAGE if self.from_this_computer() else PHONE_LOCKED_PAGE
+                    return self.send_body(page, 'text/html; charset=utf-8', 403)
                 raise HttpError(403, 'Open MarTube from its shortcut')
+            if method == 'GET' and path.startswith(HLS_PATH + '/'):
+                return self.send_stream(path[len(HLS_PATH):])
             if method == 'GET' and path in ('/', '/index.html'):
                 return self.send_index()
             if method == 'GET' and path.startswith('/static/'):
@@ -236,7 +361,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def send_login(self):
         """Trade the token for the session cookie, then reload without the token in the address bar."""
-        lifetime = f'; Max-Age={LOGIN_SECONDS}' if self.app.remember_login else ''
+        # A phone has no shortcut to log in again, so it always keeps the cookie.
+        remember = self.app.remember_login or not self.from_this_computer()
+        lifetime = f'; Max-Age={LOGIN_SECONDS}' if remember else ''
         self.send_body(b'', 'text/plain', 303, [
             ('Location', '/'), ('Cache-Control', 'no-store'),
             ('Set-Cookie', f'{COOKIE}={self.app.token}; Path=/; HttpOnly; SameSite=Strict{lifetime}')])
@@ -247,6 +374,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise HttpError(404, 'Not found')
         kind = mimetypes.guess_type(target.name)[0] or 'application/octet-stream'
         self.send_body(target.read_bytes(), kind, headers=[('Cache-Control', 'no-cache')])
+
+    def send_stream(self, path):
+        """HLS playlists and segments of the video being streamed. This computer's player is sent
+        to the CDN for segments; another device gets them through here (same public IP, PC's TLS)."""
+        status, kind, data = self.app.backend.stream_media(path, relay=not self.from_this_computer())
+        if status == 302:
+            return self.send_body(b'', 'text/plain', 302, [('Location', data), ('Cache-Control', 'no-store')])
+        self.send_body(data, kind, headers=[('Cache-Control', 'no-store')])
 
     def send_image(self, size, name):
         image = self.app.backend.images.get('/' + name, size)

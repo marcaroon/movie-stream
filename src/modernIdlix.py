@@ -469,31 +469,17 @@ class MediaProxy:
 
             def do_GET(self):
                 try:
-                    if self.path == proxy.prefix + '/master.m3u8':
-                        data = proxy.playlist(None)
-                    elif self.path in proxy.routes:
-                        url, playlist = proxy.routes[self.path]
-                        if playlist:
-                            data = proxy.playlist(url)
-                        elif proxy.relay:
-                            data = proxy.fetch(url)
-                            self.send_response(200)
-                            self.send_header('Content-Type', 'application/octet-stream')
-                            self.send_header('Content-Length', str(len(data)))
-                            self.end_headers()
-                            self.wfile.write(data)
-                            return
-                        else:
-                            source = client.current_source()
-                            self.send_response(302)
-                            self.send_header('Location', signed_url(url, source['url']))
-                            self.end_headers()
-                            return
-                    else:
+                    answer = proxy.respond(self.path)
+                    if answer is None:
                         self.send_error(404)
                         return
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+                    status, kind, data = answer
+                    self.send_response(status)
+                    if status == 302:
+                        self.send_header('Location', data)
+                        self.end_headers()
+                        return
+                    self.send_header('Content-Type', kind)
                     self.send_header('Content-Length', str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
@@ -512,16 +498,36 @@ class MediaProxy:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
+    def respond(self, path, base=None, relay=None):
+        """Answer one proxy request: (200, content type, bytes), (302, None, CDN URL) or None (unknown).
+
+        `base` is what rewritten playlist entries start with: this proxy's own address by default,
+        or a path on the app server when the player reaches the proxy through it (another device).
+        `relay` fetches segments here instead of redirecting the player to the CDN."""
+        relay = self.relay if relay is None else relay
+        if path == self.prefix + '/master.m3u8':
+            return 200, 'application/vnd.apple.mpegurl', self.playlist(None, base)
+        if path not in self.routes:
+            return None
+        url, playlist = self.routes[path]
+        if playlist:
+            return 200, 'application/vnd.apple.mpegurl', self.playlist(url, base)
+        if relay:
+            return 200, 'application/octet-stream', self.fetch(url)
+        return 302, None, signed_url(url, self.client.current_source()['url'])
+
     def route(self, url, playlist):
+        """The proxy path (without host) that stands for a remote playlist or segment."""
         key = (url, playlist)
         with self.lock:
             if key not in self.urls:
                 path = f'{self.prefix}/{len(self.urls)}' + ('.m3u8' if playlist else '.mp4')
-                self.urls[key] = self.origin + path
+                self.urls[key] = path
                 self.routes[path] = key
             return self.urls[key]
 
-    def playlist(self, url):
+    def playlist(self, url, base=None):
+        base = self.origin if base is None else base
         source = self.client.current_source()
         remote = signed_url(url or source['url'], source['url'])
         response = self.client.request.get(remote, timeout=20)
@@ -546,20 +552,22 @@ class MediaProxy:
             parsed.playlists[:] = [chosen]
             for media in parsed.media:
                 if media.uri:
-                    media.uri = self.route(urljoin(remote, media.uri), True)
-            chosen.uri = self.route(urljoin(remote, chosen.uri), True)
+                    media.uri = base + self.route(urljoin(remote, media.uri), True)
+            chosen.uri = base + self.route(urljoin(remote, chosen.uri), True)
         else:
             # Video and audio playlists cover the same runtime; keep the longest.
             self.duration = max(self.duration, sum(s.duration or 0 for s in parsed.segments))
+            mine = base + self.prefix + '/'
             for segment in parsed.segments:
-                segment.uri = self.route(urljoin(remote, segment.uri), False)
+                segment.uri = base + self.route(urljoin(remote, segment.uri), False)
                 if segment.init_section:
+                    # Segments may share one init section object: rewrite it only once.
                     original = segment.init_section.uri
-                    if not original.startswith(self.origin + '/'):
-                        segment.init_section.uri = self.route(urljoin(remote, original), False)
+                    if not original.startswith(mine):
+                        segment.init_section.uri = base + self.route(urljoin(remote, original), False)
             for key in parsed.keys:
                 if key and key.uri:
-                    key.uri = self.route(urljoin(remote, key.uri), False)
+                    key.uri = base + self.route(urljoin(remote, key.uri), False)
         return parsed.dumps().encode('utf-8')
 
     def fetch(self, url):

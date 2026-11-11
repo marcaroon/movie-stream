@@ -55,6 +55,7 @@ DEFAULT_PREFS = {
     'glass_effect': 'full',
 }
 DELETABLE_SUFFIXES = {'.mp4', '.vtt', '.srt'}
+HLS_PATH = '/hls'  # where the app server exposes the stream proxy (playlists and segments)
 
 
 def series_record(details):
@@ -613,7 +614,8 @@ class Backend:
         self.playing[url] = info
         episode = info.get('episode')
         has_subtitle = bool((client.source or {}).get('subtitles'))
-        return {'kind': 'stream', 'url': url, 'src': stream['m3u8_url'],
+        # Played through the app server (see stream_media), so a phone on the Wi-Fi can reach it too.
+        return {'kind': 'stream', 'url': url, 'src': f'{HLS_PATH}{client.proxy.prefix}/master.m3u8',
                 'subtitle': '/subtitle/stream' if has_subtitle else None,
                 'title': info['title'], 'series': info['series']['title'] if episode else None,
                 'quality': stream.get('quality'), 'resume': self.resume_position(self.library.progress(url)),
@@ -669,6 +671,20 @@ class Backend:
         except Exception as error:
             logger.debug(f'No next episode for {slug} S{season}E{number}: {error}')
         return None
+
+    def stream_media(self, path, relay):
+        """A playlist or segment of the video being streamed, served by the app server.
+
+        Playlist entries are rewritten to point back under HLS_PATH. `relay` (players on another
+        device) fetches segments here; this computer's own player is redirected to the CDN."""
+        client = self.stream_client
+        proxy = client and client.proxy
+        if not proxy or not path.startswith(proxy.prefix + '/'):
+            raise FileNotFoundError('This stream has ended; press play again')
+        answer = proxy.respond(path, base=HLS_PATH, relay=relay)
+        if answer is None:
+            raise FileNotFoundError('Unknown part of the stream')
+        return answer
 
     def stream_subtitle(self):
         """Subtitle of the video being streamed, as WebVTT text."""
