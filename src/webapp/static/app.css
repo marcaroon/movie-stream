@@ -63,24 +63,62 @@ img { display: block; }
 .clamp-2, .clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 .clamp-2 { -webkit-line-clamp: 2; } .clamp-3 { -webkit-line-clamp: 3; }
 
-/* ---------- Liquid glass ---------- */
+/* ---------- Liquid glass ----------
+   liquidglass.js adds real refraction (a lens along the rim, colour split at the corners) through
+   backdrop-filter; these rules are the surface on top: tint, edge light, inner shade, pointer glow
+   and a springy press. Without the script (or outside Chromium) the plain blur below is used. */
 .glass {
+  /* Refraction tuning read by liquidglass.js: clear glass, strong lens, like Apple's controls. */
+  --lg-blur: 2; --lg-lens: 22; --lg-refract: 1; --lg-dispersion: 0.12; --lg-saturate: 1.7;
+  --lg-tint: rgba(255, 255, 255, 0.08);
+  --lg-tint-low: rgba(255, 255, 255, 0.02);
+  --lg-edge: rgba(255, 255, 255, 0.62);
+  --lg-edge-dim: rgba(255, 255, 255, 0.08);
   position: relative;
   isolation: isolate;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
-  backdrop-filter: blur(26px) saturate(190%);
-  -webkit-backdrop-filter: blur(26px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -1px 1px rgba(255, 255, 255, 0.05), 0 10px 28px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(180deg, var(--lg-tint), var(--lg-tint-low));
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border: 0;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.1),          /* hairline */
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.28),         /* top specular */
+    inset 0 -1px 1.5px rgba(255, 255, 255, 0.1),         /* bottom bounce light */
+    inset 0 0 14px rgba(255, 255, 255, 0.05),            /* inner shade toward the rim */
+    0 8px 24px rgba(0, 0, 0, 0.26), 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: scale 0.6s var(--lg-spring, var(--ease)), box-shadow 0.3s, background 0.25s;
 }
-/* Refraction rim: brighter edges top-left and bottom-right, like light through curved glass. */
+/* Edge light from 45°: brightest where the rim faces the light (top-left) and its opposite
+   (bottom-right), falling off around the sides, like the shader's |dot(normal, light)|^falloff. */
 .glass::before {
-  content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; padding: 1px; pointer-events: none;
-  background: linear-gradient(140deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.04) 32%, rgba(255, 255, 255, 0) 62%, rgba(255, 255, 255, 0.24));
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; padding: 1.2px; pointer-events: none;
+  background: conic-gradient(from 0deg,
+    var(--lg-edge-dim) 0deg, var(--lg-edge) 135deg, var(--lg-edge-dim) 200deg,
+    var(--lg-edge-dim) 250deg, var(--lg-edge) 315deg, var(--lg-edge-dim) 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0.85;
 }
-.glass.dark { background: linear-gradient(180deg, rgba(48, 48, 54, 0.74), rgba(28, 28, 32, 0.7)); }
+/* Pointer glow: a soft light under the finger or cursor (uGlowAt in the shader). */
+.glass::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 50%), rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 65%);
+  opacity: 0; transition: opacity 0.3s;
+}
+:is(button, a, label).glass:hover::after { opacity: 0.55; }
+:is(button, a, label).glass.lg-pressed::after { opacity: 1; }
+/* Press: the glass swells on a spring, as Apple's controls do, instead of shrinking. */
+:is(button, a, label).glass.lg-pressed:not(:disabled) { scale: 1.06; transition-duration: 0.35s; }
+.btn.glass:active { transform: none; }
+.glass.dark {
+  --lg-blur: 12; --lg-lens: 18; --lg-refract: 0.9; --lg-saturate: 1.5;
+  --lg-tint: rgba(44, 44, 50, 0.56);
+  --lg-tint-low: rgba(24, 24, 28, 0.5);
+  --lg-edge: rgba(255, 255, 255, 0.42);
+  --lg-edge-dim: rgba(255, 255, 255, 0.05);
+}
+/* Large sheets (menus, dialogs, panels) keep the lens to a thin rim so their text stays calm. */
+.menu.glass, .dialog.glass, .player-panel.glass, .account-sheet.glass, .player-pop.glass { --lg-lens: 14; --lg-blur: 20; }
 
 /* ---------- Buttons ---------- */
 .btn {
